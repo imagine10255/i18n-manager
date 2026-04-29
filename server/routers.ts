@@ -25,6 +25,8 @@ import {
   getTranslationsByKeyIds,
   createTranslationKeysBatch,
   getProjectById,
+  getTranslationKeysByIds,
+  getUsersByIds,
   softDeleteTranslationKey,
   softDeleteTranslationKeys,
   updateKeySortOrders,
@@ -523,7 +525,7 @@ const translationRouter = router({
         projectKeyIds = projectKeys.map((k: any) => k.id);
         if (projectKeyIds.length === 0) return { items: [], total: 0 };
       }
-      const [items, total] = await Promise.all([
+      const [rawItems, total] = await Promise.all([
         getTranslationHistory({
           keyId: input.keyId,
           keyIds: projectKeyIds,
@@ -539,6 +541,30 @@ const translationRouter = router({
           versionId: input.versionId,
         }),
       ]);
+
+      // Enrich with keyPath + changerName so the client doesn't need a separate join.
+      const items = (rawItems as any[]).slice();
+      if (items.length > 0) {
+        const keyIdSet = Array.from(
+          new Set(items.map((r: any) => r.keyId as number))
+        );
+        const userIdSet = Array.from(
+          new Set(items.map((r: any) => r.changedBy as number).filter((n: any) => n != null))
+        );
+        const [keys, users] = await Promise.all([
+          getTranslationKeysByIds(keyIdSet),
+          getUsersByIds(userIdSet),
+        ]);
+        const keyMap = new Map<number, string>();
+        for (const k of keys as any[]) keyMap.set(k.id, k.keyPath);
+        const userMap = new Map<number, string>();
+        for (const u of users as any[]) userMap.set(u.id, u.name ?? "");
+        for (const item of items) {
+          (item as any).keyPath = keyMap.get(item.keyId) ?? null;
+          (item as any).changerName = userMap.get(item.changedBy) ?? null;
+        }
+      }
+
       return { items, total };
     }),
 });

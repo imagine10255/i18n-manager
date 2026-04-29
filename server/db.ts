@@ -1,4 +1,4 @@
-import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
+import { eq, and, or, sql, asc, desc, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -266,6 +266,26 @@ export async function createTranslationKey(data: {
   return Number((result as any).insertId ?? 0);
 }
 
+/** Bulk fetch keyPath records by id (for joining into history etc.) */
+export async function getTranslationKeysByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db
+    .select({ id: translationKeys.id, keyPath: translationKeys.keyPath })
+    .from(translationKeys)
+    .where(inArray(translationKeys.id, ids));
+}
+
+/** Bulk fetch users by id — returns { id, name } pairs only. */
+export async function getUsersByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(inArray(users.id, ids));
+}
+
 /**
  * Bulk-create translation keys for a project. Skips keyPaths that already exist
  * (by re-selecting after the insert). Returns a `keyPath → id` mapping for
@@ -456,8 +476,16 @@ export async function getTranslationHistory(options?: {
   if (options?.keyIds && options.keyIds.length > 0) {
     conditions.push(inArray(translationHistory.keyId, options.keyIds));
   }
-  if (options?.localeCode)
-    conditions.push(eq(translationHistory.localeCode, options.localeCode));
+  if (options?.localeCode) {
+    // Delete records use "*" to denote a whole-key event — keep them visible
+    // even when the user filters by a specific locale.
+    conditions.push(
+      or(
+        eq(translationHistory.localeCode, options.localeCode),
+        eq(translationHistory.localeCode, "*")
+      )!
+    );
+  }
   if (options?.changedBy)
     conditions.push(eq(translationHistory.changedBy, options.changedBy));
   if (options?.versionId)
@@ -493,8 +521,14 @@ export async function getHistoryCount(options?: {
   if (options?.keyIds && options.keyIds.length > 0) {
     conditions.push(inArray(translationHistory.keyId, options.keyIds));
   }
-  if (options?.localeCode)
-    conditions.push(eq(translationHistory.localeCode, options.localeCode));
+  if (options?.localeCode) {
+    conditions.push(
+      or(
+        eq(translationHistory.localeCode, options.localeCode),
+        eq(translationHistory.localeCode, "*")
+      )!
+    );
+  }
   if (options?.changedBy)
     conditions.push(eq(translationHistory.changedBy, options.changedBy));
   if (options?.versionId)

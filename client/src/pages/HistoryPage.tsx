@@ -12,30 +12,50 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import {
   ArrowRight,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Download,
   FileJson,
   Filter,
-  Minus,
-  Plus,
-  RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { X } from "lucide-react";
+import {
+  groupHistoryRecords,
+  distinctKeyCount,
+  type HistoryGroup,
+} from "@/lib/historyGroups";
 
 const FLAG_MAP: Record<string, string> = {
   "zh-TW": "🇹🇼", "zh-CN": "🇨🇳", "en": "🇺🇸", "ja": "🇯🇵",
   "ko": "🇰🇷", "fr": "🇫🇷", "de": "🇩🇪", "es": "🇪🇸",
 };
 
-const ACTION_STYLES = {
-  create: { label: "新增", icon: Plus, className: "bg-emerald-100 text-emerald-700 border-emerald-200" },
-  update: { label: "修改", icon: RefreshCw, className: "bg-blue-100 text-blue-700 border-blue-200" },
-  delete: { label: "刪除", icon: Minus, className: "bg-red-100 text-red-700 border-red-200" },
+const ACTION_STYLES: Record<
+  string,
+  { label: string; pill: string }
+> = {
+  create: {
+    label: "新增",
+    pill: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30",
+  },
+  update: {
+    label: "修改",
+    pill: "bg-blue-500/15 text-blue-700 dark:text-blue-300 ring-blue-500/30",
+  },
+  delete: {
+    label: "刪除",
+    pill: "bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-rose-500/30",
+  },
 };
+
+function actionStyle(a: string) {
+  return ACTION_STYLES[a] ?? ACTION_STYLES.update;
+}
 
 const PAGE_SIZE = 200;
 
@@ -118,12 +138,28 @@ export default function HistoryPage() {
     [items, filterAction]
   );
 
-  // ── Virtualized list (handles up to PAGE_SIZE=200 records smoothly) ──
+  /** Group adjacent records that came from the same save (same action + user, same versionId or close in time). */
+  const groups: HistoryGroup[] = useMemo(
+    () => groupHistoryRecords(filteredItems as any),
+    [filteredItems]
+  );
+
+  /** Which group keys are currently expanded (showing per-record detail). */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (key: string) =>
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // ── Virtualized list — runs over groups rather than raw records ──
   const listRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
-    count: filteredItems.length,
+    count: groups.length,
     getScrollElement: () => listRef.current,
-    estimateSize: () => 110,
+    estimateSize: () => 92,
     overscan: 8,
     measureElement:
       typeof window !== "undefined"
@@ -241,7 +277,7 @@ export default function HistoryPage() {
                   </div>
                 ))}
               </div>
-            ) : filteredItems.length === 0 ? (
+            ) : groups.length === 0 ? (
               <div className="text-center py-16 text-muted-foreground">
                 <Clock className="h-10 w-10 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">尚無修改記錄</p>
@@ -260,15 +296,11 @@ export default function HistoryPage() {
                   }}
                 >
                   {virtualizer.getVirtualItems().map((vItem) => {
-                    const item: any = filteredItems[vItem.index];
-                    const actionStyle =
-                      ACTION_STYLES[
-                        item.action as keyof typeof ACTION_STYLES
-                      ] ?? ACTION_STYLES.update;
-                    const ActionIcon = actionStyle.icon;
+                    const group = groups[vItem.index];
+                    const isExpanded = expandedGroups.has(group.key);
                     return (
                       <div
-                        key={item.id ?? vItem.key}
+                        key={group.key}
                         ref={virtualizer.measureElement}
                         data-index={vItem.index}
                         style={{
@@ -278,73 +310,13 @@ export default function HistoryPage() {
                           width: "100%",
                           transform: `translateY(${vItem.start}px)`,
                         }}
-                        className="flex gap-4 px-5 py-4 hover:bg-secondary/20 transition-colors border-b border-border/30"
+                        className="border-b border-border/30"
                       >
-                        {/* Action icon */}
-                        <div
-                          className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${actionStyle.className}`}
-                        >
-                          <ActionIcon className="h-3 w-3" />
-                        </div>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0 space-y-2">
-                          <div className="flex items-center flex-wrap gap-2">
-                            <code className="text-xs font-mono bg-secondary px-2 py-0.5 rounded text-foreground/80">
-                              {(item as { keyPath?: string }).keyPath ??
-                                `Key #${item.keyId}`}
-                            </code>
-                            <Badge
-                              variant="outline"
-                              className={`text-[10px] px-1.5 py-0 ${actionStyle.className}`}
-                            >
-                              {actionStyle.label}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {FLAG_MAP[item.localeCode] ?? "🌐"}{" "}
-                              {item.localeCode}
-                            </span>
-                          </div>
-
-                          {/* Value diff */}
-                          {item.action !== "delete" && (
-                            <div className="flex items-start gap-2 text-xs">
-                              {item.action === "update" &&
-                                item.oldValue !== null && (
-                                  <>
-                                    <span className="px-2 py-1 rounded bg-red-50 text-red-700 border border-red-100 line-through max-w-xs truncate">
-                                      {item.oldValue || "(空)"}
-                                    </span>
-                                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                                  </>
-                                )}
-                              <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-100 max-w-xs truncate">
-                                {item.newValue || "(空)"}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Meta */}
-                          <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                            <span className="font-medium">
-                              {(item as { changerName?: string | null })
-                                .changerName ?? "未知使用者"}
-                            </span>
-                            <span>·</span>
-                            <span>
-                              {new Date(item.changedAt).toLocaleString(
-                                "zh-TW",
-                                {
-                                  year: "numeric",
-                                  month: "2-digit",
-                                  day: "2-digit",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                }
-                              )}
-                            </span>
-                          </div>
-                        </div>
+                        <HistoryGroupRow
+                          group={group}
+                          expanded={isExpanded}
+                          onToggle={() => toggleGroup(group.key)}
+                        />
                       </div>
                     );
                   })}
@@ -413,5 +385,161 @@ export default function HistoryPage() {
         </DialogContent>
       </Dialog>
     </DashboardLayout>
+  );
+}
+
+/**
+ * One row in the history list — could be a single record OR a roll-up of
+ * many records that all came from the same save (same action, same user,
+ * same time bucket / version). The text-only "新增 / 修改 / 刪除" pill on
+ * the left replaces the previous icon-in-circle.
+ */
+function HistoryGroupRow({
+  group,
+  expanded,
+  onToggle,
+}: {
+  group: HistoryGroup;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const style = actionStyle(group.action as string);
+  const distinctKeys = distinctKeyCount(group);
+  const editor = group.changerName ?? "未知使用者";
+  const at = group.changedAt.toLocaleString("zh-TW", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  // Single record path — render the original detailed row layout
+  if (!group.isBatch) {
+    const item = group.records[0] as any;
+    return (
+      <div className="flex gap-3 px-5 py-4 hover:bg-secondary/20 transition-colors">
+        <span
+          className={`shrink-0 mt-0.5 inline-flex h-6 px-2 items-center rounded-full text-[11px] font-semibold ring-1 ${style.pill}`}
+        >
+          {style.label}
+        </span>
+        <div className="flex-1 min-w-0 space-y-2">
+          <div className="flex items-center flex-wrap gap-2">
+            <code className="text-xs font-mono bg-secondary px-2 py-0.5 rounded text-foreground/80 truncate max-w-full">
+              {item.keyPath ?? `Key #${item.keyId}`}
+            </code>
+            {item.localeCode !== "*" && (
+              <span className="text-xs text-muted-foreground">
+                {FLAG_MAP[item.localeCode] ?? "🌐"} {item.localeCode}
+              </span>
+            )}
+          </div>
+          {item.action !== "delete" && (item.oldValue || item.newValue) && (
+            <div className="flex items-start gap-2 text-xs flex-wrap">
+              {item.action === "update" && item.oldValue !== null && (
+                <>
+                  <span className="px-2 py-1 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through max-w-xs truncate">
+                    {item.oldValue || "(空)"}
+                  </span>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
+                </>
+              )}
+              {item.newValue !== null && (
+                <span className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 max-w-xs truncate">
+                  {item.newValue || "(空)"}
+                </span>
+              )}
+            </div>
+          )}
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+            <span className="font-medium">{editor}</span>
+            <span>·</span>
+            <span>{at}</span>
+            {group.versionId != null && (
+              <>
+                <span>·</span>
+                <span>版本 #{group.versionId}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Batch path — collapsible roll-up
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-5 py-3 hover:bg-secondary/30 transition-colors text-left"
+      >
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+        )}
+        <span
+          className={`shrink-0 inline-flex h-6 px-2 items-center rounded-full text-[11px] font-semibold ring-1 ${style.pill}`}
+        >
+          {style.label}
+        </span>
+        <span className="text-sm text-foreground/90">
+          {style.label} <span className="font-semibold tabular-nums">{distinctKeys}</span> 個 Key
+          {group.records.length > distinctKeys && (
+            <span className="text-muted-foreground">
+              （{group.records.length} 筆變更）
+            </span>
+          )}
+        </span>
+        <span className="ml-auto text-[11px] text-muted-foreground flex items-center gap-2">
+          <span className="font-medium text-foreground/80">{editor}</span>
+          <span>·</span>
+          <span>{at}</span>
+          {group.versionId != null && (
+            <>
+              <span>·</span>
+              <span>版本 #{group.versionId}</span>
+            </>
+          )}
+        </span>
+      </button>
+      {expanded && (
+        <div className="bg-muted/30 divide-y divide-border/40 border-t border-border/40">
+          {group.records.map((r: any, i: number) => (
+            <div
+              key={r.id ?? i}
+              className="flex items-start gap-3 pl-14 pr-5 py-2.5 text-xs"
+            >
+              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 truncate max-w-[40%]">
+                {r.keyPath ?? `Key #${r.keyId}`}
+              </code>
+              {r.localeCode !== "*" && (
+                <span className="text-muted-foreground shrink-0">
+                  {FLAG_MAP[r.localeCode] ?? "🌐"} {r.localeCode}
+                </span>
+              )}
+              <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                {r.action === "update" && r.oldValue !== null && r.oldValue !== "" && (
+                  <>
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through truncate max-w-[180px]">
+                      {r.oldValue || "(空)"}
+                    </span>
+                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                  </>
+                )}
+                {r.action !== "delete" && r.newValue !== null && (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 truncate max-w-[180px]">
+                    {r.newValue || "(空)"}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
