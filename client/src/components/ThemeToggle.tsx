@@ -47,6 +47,17 @@ export function ThemeToggle({
   surface?: "default" | "sidebar";
 }) {
   const [theme, setThemeState] = useState<Theme>(() => readStoredTheme());
+  /**
+   * Source of truth for which icon to show — derived from the *actual*
+   * `<html>` `dark` class rather than recomputing from theme + matchMedia
+   * on each render. Pre-React the inline script in index.html already set
+   * the class, so reading from the DOM avoids any "icon drift" on the
+   * Login page (where the toggle is mounted before any user interaction).
+   */
+  const [effectivelyDark, setEffectivelyDark] = useState<boolean>(() => {
+    if (typeof document === "undefined") return false;
+    return document.documentElement.classList.contains("dark");
+  });
 
   useEffect(() => {
     applyTheme(theme);
@@ -55,18 +66,22 @@ export function ThemeToggle({
     } else {
       window.localStorage.setItem(STORAGE_KEY, theme);
     }
+    // Mirror whatever applyTheme just decided
+    setEffectivelyDark(document.documentElement.classList.contains("dark"));
   }, [theme]);
 
   useEffect(() => {
     if (theme !== "system") return;
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => applyTheme("system");
+    const handler = () => {
+      applyTheme("system");
+      setEffectivelyDark(
+        document.documentElement.classList.contains("dark")
+      );
+    };
     mql.addEventListener("change", handler);
     return () => mql.removeEventListener("change", handler);
   }, [theme]);
-
-  const effectivelyDark =
-    theme === "dark" || (theme === "system" && systemPrefersDark());
 
   const items: { value: Theme; label: string; icon: typeof Sun }[] = [
     { value: "light", label: "淺色", icon: Sun },

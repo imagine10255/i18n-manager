@@ -6,7 +6,7 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { ENV } from "./_core/env";
 import { sdk } from "./_core/sdk";
-import { hashPassword } from "./_core/password";
+import { hashPassword, verifyPassword } from "./_core/password";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { translationHistory } from "../drizzle/schema";
@@ -28,6 +28,7 @@ import {
   deleteUser,
   getProjectById,
   getTranslationKeysByIds,
+  getUserByEmail,
   getUsersByIds,
   softDeleteTranslationKey,
   softDeleteTranslationKeys,
@@ -622,13 +623,22 @@ const userRouter = router({
     .input(
       z.object({
         name: z.string().trim().min(1).max(128),
-        email: z.string().trim().email().optional().or(z.literal("")),
+        // Email is required for local login (it's the username).
+        email: z.string().trim().email(),
         role: z.enum(["admin", "editor", "rd", "qa"]).default("rd"),
         password: z.string().min(6).max(128).optional().or(z.literal("")),
         isActive: z.boolean().default(true),
       })
     )
     .mutation(async ({ input }) => {
+      // Reject duplicate email — it's the login key, must be unique.
+      const dup = await getUserByEmail(input.email);
+      if (dup) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Email「${input.email}」已被使用`,
+        });
+      }
       const openId = `manual:${nanoid(16)}`;
       const passwordHash = input.password
         ? await hashPassword(input.password)
@@ -636,7 +646,7 @@ const userRouter = router({
       await upsertUser({
         openId,
         name: input.name,
-        email: input.email ? input.email : null,
+        email: input.email,
         loginMethod: "manual",
         role: input.role,
         isActive: input.isActive,
@@ -666,15 +676,26 @@ const userRouter = router({
       z.object({
         id: z.number().int(),
         name: z.string().trim().min(1).max(128).optional(),
-        email: z.string().trim().email().nullable().optional(),
+        email: z.string().trim().email().optional(),
         role: z.enum(["admin", "editor", "rd", "qa"]).optional(),
         isActive: z.boolean().optional(),
         password: z.string().min(6).max(128).optional().or(z.literal("")),
       })
     )
     .mutation(async ({ input }) => {
-      const { id, password, ...rest } = input;
+      const { id, password, email, ...rest } = input;
+      // If email is changing, check it isn't already taken by another user.
+      if (email !== undefined) {
+        const existing = await getUserByEmail(email);
+        if (existing && existing.id !== id) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Email「${email}」已被其他使用者佔用`,
+          });
+        }
+      }
       const data: any = { ...rest };
+      if (email !== undefined) data.email = email;
       if (password) {
         data.passwordHash = await hashPassword(password);
       }
@@ -705,22 +726,87 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+    /**
+     * Local sign-in by email + password. Looks up the user record by email,
+     * verifies their stored scrypt hash, refuses if the account is disabled.
+     *
+     * Falls back to the legacy ENV-based shared credential when an admin
+     * hasn't created any local users yet (so first-run install still works).
+     */
     localLogin: publicProcedure
-      .input(z.object({ username: z.string(), password: z.string() }))
+      .input(
+        z.object({
+          email: z.string().trim().email(),
+          password: z.string().min(1),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
-        if (!ENV.localAuthUsername || !ENV.localAuthPassword) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "本地登入未設定" });
+        const user = await getUserByEmail(input.email);
+
+        if (user && user.passwordHash) {
+          if (!user.isActive) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "此帳號已停用，請聯絡管理員",
+            });
+          }
+          const ok = await verifyPassword(input.password, user.passwordHash);
+          if (!ok) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "Email 或密碼錯誤",
+            });
+          }
+          await updateUser(user.id, { /* touches updatedAt; lastSignedIn refreshed below via upsert */ });
+          await upsertUser({
+            openId: user.openId,
+            lastSignedIn: new Date(),
+          });
+          const token = await sdk.createSessionToken(user.openId, {
+            name: user.name ?? input.email,
+            expiresInMs: ONE_YEAR_MS,
+          });
+          const cookieOptions = getSessionCookieOptions(ctx.req);
+          ctx.res.cookie(COOKIE_NAME, token, {
+            ...cookieOptions,
+            maxAge: ONE_YEAR_MS,
+          });
+          return { success: true } as const;
         }
-        if (input.username !== ENV.localAuthUsername || input.password !== ENV.localAuthPassword) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "帳號或密碼錯誤" });
+
+        // Bootstrap fallback: no DB user with that email + password set →
+        // fall through to the ENV-configured single shared credential.
+        if (
+          ENV.localAuthUsername &&
+          ENV.localAuthPassword &&
+          input.email === ENV.localAuthUsername &&
+          input.password === ENV.localAuthPassword
+        ) {
+          const openId = ENV.ownerOpenId || input.email;
+          const name = ENV.ownerName || input.email;
+          await upsertUser({
+            openId,
+            name,
+            email: input.email,
+            loginMethod: "local",
+            lastSignedIn: new Date(),
+          });
+          const token = await sdk.createSessionToken(openId, {
+            name,
+            expiresInMs: ONE_YEAR_MS,
+          });
+          const cookieOptions = getSessionCookieOptions(ctx.req);
+          ctx.res.cookie(COOKIE_NAME, token, {
+            ...cookieOptions,
+            maxAge: ONE_YEAR_MS,
+          });
+          return { success: true } as const;
         }
-        const openId = ENV.ownerOpenId || input.username;
-        const name = ENV.ownerName || input.username;
-        await upsertUser({ openId, name, email: null, loginMethod: "local", lastSignedIn: new Date() });
-        const token = await sdk.createSessionToken(openId, { name, expiresInMs: ONE_YEAR_MS });
-        const cookieOptions = getSessionCookieOptions(ctx.req);
-        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-        return { success: true } as const;
+
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Email 或密碼錯誤",
+        });
       }),
   }),
   locale: localeRouter,

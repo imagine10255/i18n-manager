@@ -144,13 +144,17 @@ export default function UserManager() {
       toast.error("請輸入名稱");
       return;
     }
+    if (!addForm.email.trim()) {
+      toast.error("請輸入 Email — 用於登入");
+      return;
+    }
     if (addForm.password && addForm.password.length < 6) {
       toast.error("密碼至少 6 個字");
       return;
     }
     createUserMutation.mutate({
       name: addForm.name.trim(),
-      email: addForm.email.trim() || undefined,
+      email: addForm.email.trim(),
       role: addForm.role,
       isActive: addForm.isActive,
       password: addForm.password || undefined,
@@ -179,6 +183,10 @@ export default function UserManager() {
       toast.error("名稱不能空");
       return;
     }
+    if (!editForm.email.trim()) {
+      toast.error("Email 不能空 — 用於登入");
+      return;
+    }
     if (editForm.password && editForm.password.length < 6) {
       toast.error("密碼至少 6 個字");
       return;
@@ -186,7 +194,7 @@ export default function UserManager() {
     updateMutation.mutate({
       id: editing.id,
       name: editForm.name.trim(),
-      email: editForm.email.trim() || null,
+      email: editForm.email.trim(),
       role: editForm.role,
       isActive: editForm.isActive,
       password: editForm.password || undefined,
@@ -587,7 +595,7 @@ function UserFormFields({
       </div>
       <div>
         <Label htmlFor="user-email" className="text-xs">
-          Email{isCreating ? "（選填）" : ""}
+          Email * <span className="text-muted-foreground/70">（用於登入）</span>
         </Label>
         <Input
           id="user-email"
@@ -596,6 +604,7 @@ function UserFormFields({
           onChange={(e) => onChange({ email: e.target.value })}
           placeholder="user@example.com"
           className="mt-1"
+          required
         />
       </div>
       <div>

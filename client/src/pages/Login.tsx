@@ -4,12 +4,12 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Globe, Lock, User2 } from "lucide-react";
+import { Globe, Lock, Mail } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -25,7 +25,7 @@ export default function Login() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
-    loginMutation.mutate({ username, password });
+    loginMutation.mutate({ email: email.trim(), password });
   };
 
   const appTitle = import.meta.env.VITE_APP_TITLE || "多語系翻譯管理系統";
@@ -69,20 +69,21 @@ export default function Login() {
         <div className="surface-glass rounded-2xl p-6 shadow-[var(--shadow-elevated)]">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="username" className="text-xs font-medium text-muted-foreground">
-                帳號
+              <Label htmlFor="email" className="text-xs font-medium text-muted-foreground">
+                Email
               </Label>
               <div className="relative">
-                <User2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70 pointer-events-none" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70 pointer-events-none" />
                 <Input
-                  id="username"
-                  type="text"
-                  autoComplete="username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  id="email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   required
                   className="pl-9 h-10"
-                  placeholder="請輸入帳號"
+                  placeholder="user@example.com"
                 />
               </div>
             </div>
