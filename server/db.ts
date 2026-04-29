@@ -70,6 +70,14 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = "admin";
       updateSet.role = "admin";
     }
+    if (user.isActive !== undefined) {
+      values.isActive = user.isActive;
+      updateSet.isActive = user.isActive;
+    }
+    if ((user as any).passwordHash !== undefined) {
+      (values as any).passwordHash = (user as any).passwordHash;
+      (updateSet as any).passwordHash = (user as any).passwordHash;
+    }
 
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
@@ -698,4 +706,27 @@ export async function updateUserRole(userId: number, role: string) {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ role: role as any }).where(eq(users.id, userId));
+}
+
+/** Generic user update — only the keys present in `data` are written. */
+export async function updateUser(
+  userId: number,
+  data: Partial<{
+    name: string;
+    email: string | null;
+    role: "admin" | "editor" | "rd" | "qa";
+    isActive: boolean;
+    passwordHash: string | null;
+  }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set(data as any).where(eq(users.id, userId));
+}
+
+/** Hard-delete a user (cascades nothing — history rows stay with their original userId). */
+export async function deleteUser(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(users).where(eq(users.id, userId));
 }

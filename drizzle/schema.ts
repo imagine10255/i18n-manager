@@ -16,6 +16,10 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["admin", "editor", "rd", "qa"]).default("rd").notNull(),
+  /** Whether the account can sign in / be assigned new work. Disabled users keep their history but can't authenticate. */
+  isActive: boolean("isActive").default(true).notNull(),
+  /** Salted scrypt hash, format `salt:hash` (both hex). NULL = no local password (OAuth-only). */
+  passwordHash: varchar("passwordHash", { length: 256 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),

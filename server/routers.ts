@@ -6,6 +6,7 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { ENV } from "./_core/env";
 import { sdk } from "./_core/sdk";
+import { hashPassword } from "./_core/password";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { translationHistory } from "../drizzle/schema";
@@ -24,6 +25,7 @@ import {
   getTranslationStats,
   getTranslationsByKeyIds,
   createTranslationKeysBatch,
+  deleteUser,
   getProjectById,
   getTranslationKeysByIds,
   getUsersByIds,
@@ -31,6 +33,7 @@ import {
   softDeleteTranslationKeys,
   updateKeySortOrders,
   updateProject,
+  updateUser,
   updateLocale,
   updateTranslationKey,
   updateUserRole,
@@ -621,16 +624,23 @@ const userRouter = router({
         name: z.string().trim().min(1).max(128),
         email: z.string().trim().email().optional().or(z.literal("")),
         role: z.enum(["admin", "editor", "rd", "qa"]).default("rd"),
+        password: z.string().min(6).max(128).optional().or(z.literal("")),
+        isActive: z.boolean().default(true),
       })
     )
     .mutation(async ({ input }) => {
       const openId = `manual:${nanoid(16)}`;
+      const passwordHash = input.password
+        ? await hashPassword(input.password)
+        : null;
       await upsertUser({
         openId,
         name: input.name,
         email: input.email ? input.email : null,
         loginMethod: "manual",
         role: input.role,
+        isActive: input.isActive,
+        passwordHash,
         lastSignedIn: new Date(),
       });
       return { success: true, openId };
@@ -644,6 +654,43 @@ const userRouter = router({
     )
     .mutation(async ({ input }) => {
       await updateUserRole(input.userId, input.role);
+      return { success: true };
+    }),
+  /**
+   * General-purpose user update. Empty / undefined password leaves the
+   * existing hash untouched; a non-empty password is re-hashed and replaces
+   * whatever was there.
+   */
+  update: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        name: z.string().trim().min(1).max(128).optional(),
+        email: z.string().trim().email().nullable().optional(),
+        role: z.enum(["admin", "editor", "rd", "qa"]).optional(),
+        isActive: z.boolean().optional(),
+        password: z.string().min(6).max(128).optional().or(z.literal("")),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, password, ...rest } = input;
+      const data: any = { ...rest };
+      if (password) {
+        data.passwordHash = await hashPassword(password);
+      }
+      await updateUser(id, data);
+      return { success: true };
+    }),
+  delete: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input, ctx }) => {
+      if (input.id === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "不能刪除自己的帳號",
+        });
+      }
+      await deleteUser(input.id);
       return { success: true };
     }),
 });
