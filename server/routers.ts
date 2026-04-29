@@ -24,9 +24,11 @@ import {
   getTranslationStats,
   getTranslationsByKeyIds,
   createTranslationKeysBatch,
+  getProjectById,
   softDeleteTranslationKey,
   softDeleteTranslationKeys,
   updateKeySortOrders,
+  updateProject,
   updateLocale,
   updateTranslationKey,
   updateUserRole,
@@ -97,11 +99,33 @@ const localeRouter = router({
       await deleteLocale(input.id);
       return { success: true };
     }),
+  /** Bulk update sortOrder — used by drag-to-reorder on the locale manager. */
+  updateSortOrders: adminProcedure
+    .input(
+      z.object({
+        items: z.array(
+          z.object({
+            id: z.number().int(),
+            sortOrder: z.number().int(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input }) => {
+      for (const { id, sortOrder } of input.items) {
+        await updateLocale(id, { sortOrder });
+      }
+      return { success: true, updated: input.items.length };
+    }),
 });
 
 // ─── Project router ───────────────────────────────────────────────────────────
 const projectRouter = router({
   list: protectedProcedure.query(() => getAllProjects()),
+  /** Read a single project by id (for the project-settings dialog). */
+  get: protectedProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(({ input }) => getProjectById(input.id)),
   create: adminProcedure
     .input(
       z.object({
@@ -115,6 +139,32 @@ const projectRouter = router({
         createdBy: ctx.user.id,
       });
       return { id };
+    }),
+  /**
+   * Update project settings — including the per-project locale whitelist.
+   * `allowedLocaleCodes`: pass `null` for "all active locales" (default).
+   */
+  update: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        name: z.string().min(1).max(128).optional(),
+        description: z.string().optional(),
+        isActive: z.boolean().optional(),
+        allowedLocaleCodes: z.array(z.string()).nullable().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, allowedLocaleCodes, ...rest } = input;
+      const data: any = { ...rest };
+      if (allowedLocaleCodes !== undefined) {
+        data.allowedLocaleCodes =
+          allowedLocaleCodes === null || allowedLocaleCodes.length === 0
+            ? null
+            : JSON.stringify(allowedLocaleCodes);
+      }
+      await updateProject(id, data);
+      return { success: true };
     }),
 });
 

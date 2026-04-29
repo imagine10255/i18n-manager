@@ -45,6 +45,12 @@ export const projects = mysqlTable("projects", {
   name: varchar("name", { length: 128 }).notNull().unique(),
   description: text("description"),
   isActive: boolean("isActive").default(true).notNull(),
+  /**
+   * Optional whitelist of locale codes this project supports. Stored as a JSON
+   * string array (e.g. `["zh-TW","en-US","ja-JP"]`). NULL or empty array means
+   * "all active locales" — keeps backward compat for existing rows.
+   */
+  allowedLocaleCodes: text("allowedLocaleCodes"),
   createdBy: int("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

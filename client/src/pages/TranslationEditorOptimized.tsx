@@ -62,6 +62,8 @@ import {
   CornerDownRight,
   History,
   ArrowDownAZ,
+  Eye,
+  Settings2,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -71,6 +73,7 @@ import CreateProjectModal from "@/components/CreateProjectModal";
 import CreateKeyModal from "@/components/CreateKeyModal";
 import KeyHistoryModal from "@/components/KeyHistoryModal";
 import ProjectHistoryModal from "@/components/ProjectHistoryModal";
+import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 
 interface TreeNode {
   id: string;
@@ -247,6 +250,44 @@ export default function TranslationEditorOptimized() {
   } | null>(null);
   const [historyKey, setHistoryKey] = useState<{ id: number; path: string } | null>(null);
   const [showProjectHistory, setShowProjectHistory] = useState(false);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
+  /** localStorage-backed per-project locale view filter (no DB). null = show all. */
+  const [hiddenLocaleCodes, setHiddenLocaleCodesState] = useState<Set<string>>(
+    new Set()
+  );
+  // Persist whenever it changes (keyed by selectedProject)
+  useEffect(() => {
+    if (selectedProject === null) return;
+    try {
+      const raw = window.localStorage.getItem(
+        `i18n-editor-hidden-locales-${selectedProject}`
+      );
+      if (raw) {
+        const arr = JSON.parse(raw);
+        setHiddenLocaleCodesState(
+          new Set(Array.isArray(arr) ? (arr as string[]) : [])
+        );
+      } else {
+        setHiddenLocaleCodesState(new Set());
+      }
+    } catch {
+      setHiddenLocaleCodesState(new Set());
+    }
+  }, [selectedProject]);
+  const setHiddenLocaleCodes = useCallback(
+    (next: Set<string>) => {
+      setHiddenLocaleCodesState(new Set(next));
+      if (selectedProject !== null) {
+        try {
+          window.localStorage.setItem(
+            `i18n-editor-hidden-locales-${selectedProject}`,
+            JSON.stringify(Array.from(next))
+          );
+        } catch {}
+      }
+    },
+    [selectedProject]
+  );
   /** Per-file parse result. `localeCode` is null when filename didn't match any locale. */
   type ImportFileEntry = {
     fileName: string;
@@ -263,7 +304,7 @@ export default function TranslationEditorOptimized() {
   // 查詢資料
   const utils = trpc.useUtils();
   const localesQuery = trpc.locale.listActive.useQuery();
-  const locales = localesQuery.data ?? [];
+  const allActiveLocales = localesQuery.data ?? [];
 
   // 查詢專案列表
   const projectsQuery = trpc.project.list.useQuery();
@@ -980,6 +1021,46 @@ export default function TranslationEditorOptimized() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [pendingUpdates.size, expandAll, collapseAll, handleSave]);
 
+  const currentProject = useMemo(
+    () => (projects as any[]).find((x) => x.id === selectedProject),
+    [projects, selectedProject]
+  );
+  const currentProjectName = currentProject?.name as string | undefined;
+
+  /**
+   * Effective locales for this project — narrowed by:
+   *   1. Project-level whitelist (`allowedLocaleCodes`, persisted in DB)
+   *   2. Per-user view filter (`hiddenLocaleCodes`, localStorage only)
+   * Falls back to all active locales when no whitelist is set.
+   */
+  const projectAllowedSet = useMemo<Set<string> | null>(() => {
+    const raw = currentProject?.allowedLocaleCodes;
+    if (!raw) return null;
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) && arr.length > 0
+        ? new Set(arr as string[])
+        : null;
+    } catch {
+      return null;
+    }
+  }, [currentProject]);
+
+  /** All locales this project is configured to support (DB-level filter). */
+  const projectLocales = useMemo(() => {
+    if (!projectAllowedSet) return allActiveLocales;
+    return (allActiveLocales as any[]).filter((l) =>
+      projectAllowedSet.has(l.code)
+    );
+  }, [allActiveLocales, projectAllowedSet]);
+
+  /** What the editor actually renders (after the user's view filter). */
+  const locales = useMemo(
+    () =>
+      (projectLocales as any[]).filter((l) => !hiddenLocaleCodes.has(l.code)),
+    [projectLocales, hiddenLocaleCodes]
+  );
+
   const totalLeafKeys = allKeys.length;
   const totalLocales = locales.length;
   const hasChanges = pendingUpdates.size > 0;
@@ -992,11 +1073,6 @@ export default function TranslationEditorOptimized() {
     }
     return m;
   }, [allKeys]);
-
-  const currentProjectName = useMemo(() => {
-    const p = (projects as any[]).find((x) => x.id === selectedProject);
-    return p?.name as string | undefined;
-  }, [projects, selectedProject]);
 
   // Compute minimum row width so many-locale layouts can scroll horizontally
   // instead of squeezing inputs and clipping the meta column.
@@ -1169,6 +1245,85 @@ export default function TranslationEditorOptimized() {
             >
               <History className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">歷程</span>
+            </Button>
+
+            {/* View-locale filter (localStorage, no DB) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-1.5"
+                  title="勾選要顯示的語系（只影響你看到的畫面）"
+                  disabled={projectLocales.length === 0}
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">顯示</span>
+                  {hiddenLocaleCodes.size > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[10px] tabular-nums">
+                      隱 {hiddenLocaleCodes.size}
+                    </span>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-xs">
+                  顯示語系（不寫入 DB）
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {projectLocales.map((l: any) => {
+                  const visible = !hiddenLocaleCodes.has(l.code);
+                  return (
+                    <DropdownMenuItem
+                      key={l.code}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const next = new Set(hiddenLocaleCodes);
+                        if (visible) next.add(l.code);
+                        else next.delete(l.code);
+                        setHiddenLocaleCodes(next);
+                      }}
+                      className="cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        readOnly
+                        className="mr-2 h-3.5 w-3.5 accent-primary"
+                      />
+                      <span className="font-medium flex-1 truncate">
+                        {localeChineseName(l)}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        {l.code}
+                      </span>
+                    </DropdownMenuItem>
+                  );
+                })}
+                {hiddenLocaleCodes.size > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setHiddenLocaleCodes(new Set())}
+                      className="cursor-pointer text-primary focus:text-primary"
+                    >
+                      全部顯示
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Project settings (admin) */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => setShowProjectSettings(true)}
+              title="專案設定（含可用語系）"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">設定</span>
             </Button>
 
             {/* Stat pills + sync indicator — pushed right */}
@@ -1576,6 +1731,13 @@ export default function TranslationEditorOptimized() {
           keyIdToPath={keyIdToPath}
           userIdToName={userIdToName}
           onClose={() => setShowProjectHistory(false)}
+        />
+
+        {/* Project settings (allowed locales etc.) */}
+        <ProjectSettingsModal
+          open={showProjectSettings}
+          projectId={selectedProject}
+          onClose={() => setShowProjectSettings(false)}
         />
 
         <CreateKeyModal

@@ -71,7 +71,7 @@ export default function Dashboard() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="w-full space-y-8">
         {/* Page title */}
         <div className="animate-fade-in-up">
           <div className="inline-flex items-center gap-2 text-xs text-muted-foreground mb-2">

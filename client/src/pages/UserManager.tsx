@@ -105,7 +105,7 @@ export default function UserManager() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="w-full space-y-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">使用者管理</h1>
@@ -180,36 +180,38 @@ export default function UserManager() {
                         </div>
                         <p className="text-xs text-muted-foreground truncate">{user.email ?? "—"}</p>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs text-muted-foreground hidden sm:block">
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="hidden sm:block w-24 text-right text-xs text-muted-foreground tabular-nums">
                           {new Date(user.lastSignedIn).toLocaleDateString("zh-TW")}
                         </span>
-                        {isSelf ? (
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium ${ROLE_COLORS[user.role]}`}>
-                            {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
-                          </span>
-                        ) : (
-                          <Select
-                            value={user.role}
-                            onValueChange={(role) =>
-                              updateRoleMutation.mutate({
-                                userId: user.id,
-                                role: role as "admin" | "editor" | "rd" | "qa",
-                              })
-                            }
-                          >
-                            <SelectTrigger className="h-8 w-28 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {ROLES.map((r) => (
-                                <SelectItem key={r.value} value={r.value} className="text-xs">
-                                  {r.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
+                        <div className="w-28 shrink-0 flex justify-end">
+                          {isSelf ? (
+                            <span className={`inline-flex h-8 items-center justify-center w-full px-2.5 rounded-md text-xs font-medium ${ROLE_COLORS[user.role]}`}>
+                              {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                            </span>
+                          ) : (
+                            <Select
+                              value={user.role}
+                              onValueChange={(role) =>
+                                updateRoleMutation.mutate({
+                                  userId: user.id,
+                                  role: role as "admin" | "editor" | "rd" | "qa",
+                                })
+                              }
+                            >
+                              <SelectTrigger className="h-8 w-full text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {ROLES.map((r) => (
+                                  <SelectItem key={r.value} value={r.value} className="text-xs">
+                                    {r.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );

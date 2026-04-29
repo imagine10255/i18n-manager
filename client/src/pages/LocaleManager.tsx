@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
-import { Globe, Plus, Search, Trash2 } from "lucide-react";
+import { Globe, GripVertical, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { LocaleFlag } from "@/components/LocaleFlag";
@@ -59,6 +59,31 @@ export default function LocaleManager() {
     },
     onError: (e) => toast.error(`刪除失敗：${e.message}`),
   });
+
+  const reorderMutation = trpc.locale.updateSortOrders.useMutation({
+    onError: (e) => {
+      toast.error(`排序失敗：${e.message}`);
+      utils.locale.list.invalidate();
+      utils.locale.listActive.invalidate();
+    },
+  });
+
+  // HTML5 DnD state — index in the displayed order
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  const handleReorder = (fromIdx: number, toIdx: number) => {
+    if (!locales || fromIdx === toIdx) return;
+    const arr = [...locales];
+    const [moved] = arr.splice(fromIdx, 1);
+    arr.splice(toIdx, 0, moved);
+    // Optimistic update — write to the cache immediately so the row jumps
+    utils.locale.list.setData(undefined, arr as any);
+    // Persist new sortOrders (10, 20, 30...) — leaves room for inserts
+    reorderMutation.mutate({
+      items: arr.map((l, i) => ({ id: l.id, sortOrder: (i + 1) * 10 })),
+    });
+  };
 
   const [showAdd, setShowAdd] = useState(false);
   const [codeStyle, setCodeStyle] = useState<CodeStyle>("long");
@@ -124,7 +149,7 @@ export default function LocaleManager() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="w-full space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">語系管理</h1>
@@ -166,11 +191,58 @@ export default function LocaleManager() {
               </div>
             ) : locales && locales.length > 0 ? (
               <div className="space-y-2">
-                {locales.map((locale) => (
+                {locales.map((locale, idx) => (
                   <div
                     key={locale.id}
-                    className="flex items-center gap-4 p-3 rounded-lg border border-border/60 hover:bg-muted/40 transition-colors group"
+                    draggable={isAdmin}
+                    onDragStart={(e) => {
+                      if (!isAdmin) return;
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", String(idx));
+                      setDraggingIndex(idx);
+                    }}
+                    onDragOver={(e) => {
+                      if (!isAdmin || draggingIndex === null) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (overIndex !== idx) setOverIndex(idx);
+                    }}
+                    onDragLeave={() => {
+                      if (overIndex === idx) setOverIndex(null);
+                    }}
+                    onDrop={(e) => {
+                      if (!isAdmin) return;
+                      e.preventDefault();
+                      if (
+                        draggingIndex !== null &&
+                        draggingIndex !== idx
+                      ) {
+                        handleReorder(draggingIndex, idx);
+                      }
+                      setDraggingIndex(null);
+                      setOverIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingIndex(null);
+                      setOverIndex(null);
+                    }}
+                    className={`flex items-center gap-3 p-3 rounded-lg border transition-colors group ${
+                      draggingIndex === idx
+                        ? "opacity-40 border-primary/40"
+                        : overIndex === idx && draggingIndex !== null
+                          ? "border-primary/60 bg-primary/5"
+                          : "border-border/60 hover:bg-muted/40"
+                    }`}
                   >
+                    {isAdmin && (
+                      <span
+                        className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground/80 shrink-0 -ml-1"
+                        title="拖曳以調整順序"
+                        aria-label="拖曳排序握把"
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </span>
+                    )}
                     <LocaleFlag code={locale.code} size="lg" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">

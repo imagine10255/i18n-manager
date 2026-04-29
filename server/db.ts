@@ -186,6 +186,21 @@ export async function createProject(data: {
   return Number((result as any).insertId ?? 0);
 }
 
+export async function updateProject(
+  id: number,
+  data: Partial<{
+    name: string;
+    description: string;
+    isActive: boolean;
+    /** JSON-encoded array of locale codes (e.g. `["zh-TW","en-US"]`); null = all */
+    allowedLocaleCodes: string | null;
+  }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(projects).set(data).where(eq(projects.id, id));
+}
+
 // ─── Translation Version queries ──────────────────────────────────────────────
 export async function getVersionsByProject(projectId: number) {
   const db = await getDb();
