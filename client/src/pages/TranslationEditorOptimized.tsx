@@ -61,6 +61,7 @@ import {
   FileJson,
   CornerDownRight,
   History,
+  ArrowDownAZ,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -69,6 +70,7 @@ import VersionSelectModal from "@/components/VersionSelectModal";
 import CreateProjectModal from "@/components/CreateProjectModal";
 import CreateKeyModal from "@/components/CreateKeyModal";
 import KeyHistoryModal from "@/components/KeyHistoryModal";
+import ProjectHistoryModal from "@/components/ProjectHistoryModal";
 
 interface TreeNode {
   id: string;
@@ -84,6 +86,8 @@ interface TreeNode {
   lastModifiedBy?: number; // user id, resolved to name at render
   /** When this key (or, for folders, their newest descendant) was created. Used to put new keys at top. */
   createdAt?: Date;
+  /** Persisted display order — smaller = earlier. Folders bubble up min of descendants. */
+  sortOrder: number;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -220,16 +224,6 @@ export default function TranslationEditorOptimized() {
   );
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [onlyVersionKeys, setOnlyVersionKeys] = useState(false);
-  const [sortMode, setSortMode] = useState<"createdAt" | "alpha">(() => {
-    if (typeof window === "undefined") return "createdAt";
-    const v = window.localStorage.getItem("i18n-editor-sort-mode");
-    return v === "alpha" ? "alpha" : "createdAt";
-  });
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("i18n-editor-sort-mode", sortMode);
-    }
-  }, [sortMode]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
   const [editingKeyPath, setEditingKeyPath] = useState("");
@@ -244,11 +238,17 @@ export default function TranslationEditorOptimized() {
   } | null>(null);
   const [deletingKey, setDeletingKey] = useState<{ id: number; path: string } | null>(null);
   const [historyKey, setHistoryKey] = useState<{ id: number; path: string } | null>(null);
-  const [importFile, setImportFile] = useState<{
-    file: File;
-    parsed: Record<string, string>;
-    localeCode: string;
-  } | null>(null);
+  const [showProjectHistory, setShowProjectHistory] = useState(false);
+  /** Per-file parse result. `localeCode` is null when filename didn't match any locale. */
+  type ImportFileEntry = {
+    fileName: string;
+    localeCode: string | null;
+    localeName?: string;
+    count: number;
+    parsed?: Record<string, string>;
+    error?: string;
+  };
+  const [importPreview, setImportPreview] = useState<ImportFileEntry[] | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const modalSaveRef = useRef<(() => void) | null>(null);
 
@@ -270,6 +270,7 @@ export default function TranslationEditorOptimized() {
     }
     return m;
   }, [usersQuery.data]);
+
 
   // ── Project tab strip sync ──
   // 1) Auto-add selected project to the tab strip
@@ -452,6 +453,10 @@ export default function TranslationEditorOptimized() {
                   ? new Date((key as any).createdAt)
                   : undefined
                 : undefined,
+              // Folders compute their sortOrder later from descendants; leaves
+              // copy from the underlying key. Default 0 lets new keys (without
+              // an explicit reorder) tie and tiebreak by createdAt DESC.
+              sortOrder: isLeaf ? ((key as any).sortOrder ?? 0) : Number.POSITIVE_INFINITY,
             };
             map.set(currentPath, node);
 
@@ -477,38 +482,42 @@ export default function TranslationEditorOptimized() {
         }
       }
 
-      // Post-order: bubble each folder's `createdAt` up to be the newest of its
-      // descendants, then sort children according to the selected mode.
-      const computeAndSort = (nodes: TreeNode[]): Date | undefined => {
+      // Post-order: bubble each folder's `createdAt` (newest descendant) and
+      // `sortOrder` (smallest descendant) up. Children are then sorted by
+      // sortOrder ASC, with createdAt DESC as a tiebreak so freshly created
+      // keys (default sortOrder=0) appear at the top.
+      const computeAndSort = (
+        nodes: TreeNode[]
+      ): { maxAt: Date | undefined; minOrder: number } => {
         let maxAt: Date | undefined;
+        let minOrder = Number.POSITIVE_INFINITY;
         for (const n of nodes) {
           if (n.isFolder) {
-            const childMax = computeAndSort(n.children);
-            n.createdAt = childMax;
+            const child = computeAndSort(n.children);
+            n.createdAt = child.maxAt;
+            n.sortOrder = Number.isFinite(child.minOrder) ? child.minOrder : 0;
           }
           if (n.createdAt && (!maxAt || n.createdAt > maxAt)) {
             maxAt = n.createdAt;
           }
+          if (n.sortOrder < minOrder) minOrder = n.sortOrder;
         }
-        if (sortMode === "alpha") {
-          nodes.sort((a, b) => a.keyPath.localeCompare(b.keyPath));
-        } else {
-          nodes.sort((a, b) => {
-            const at = a.createdAt?.getTime() ?? 0;
-            const bt = b.createdAt?.getTime() ?? 0;
-            // newest first; tie-break alphabetically so the order is stable
-            if (bt !== at) return bt - at;
-            return a.keyPath.localeCompare(b.keyPath);
-          });
-        }
-        return maxAt;
+        nodes.sort((a, b) => {
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+          // Tie: newest createdAt first
+          const at = a.createdAt?.getTime() ?? 0;
+          const bt = b.createdAt?.getTime() ?? 0;
+          if (bt !== at) return bt - at;
+          return a.keyPath.localeCompare(b.keyPath);
+        });
+        return { maxAt, minOrder };
       };
       computeAndSort(roots);
       return roots;
     };
 
     return buildTree(rootKeys);
-  }, [rootKeys, translations, sortMode]);
+  }, [rootKeys, translations]);
 
   // count leaf descendants for folder badges
   const folderLeafCount = useMemo(() => {
@@ -693,6 +702,31 @@ export default function TranslationEditorOptimized() {
     setShowVersionModal(false);
   };
 
+  const resortMutation = trpc.translationKey.updateSortOrders.useMutation({
+    onSuccess: () => {
+      toast.success("已依命名重新排序");
+      utils.translationKey.listByProject.invalidate();
+      utils.translationKey.listWithTranslations.invalidate();
+    },
+    onError: (error) => {
+      toast.error(`重排失敗: ${error.message}`);
+    },
+  });
+
+  const handleResortByName = useCallback(() => {
+    if (allKeys.length === 0) return;
+    const sorted = [...allKeys].sort((a: any, b: any) =>
+      a.keyPath.localeCompare(b.keyPath)
+    );
+    // Use 10-step increments so future inserts have room (and so newly created
+    // keys with sortOrder=0 stay at the top until the next resort).
+    const items = sorted.map((k: any, i: number) => ({
+      id: k.id as number,
+      sortOrder: (i + 1) * 10,
+    }));
+    resortMutation.mutate({ items });
+  }, [allKeys, resortMutation]);
+
   const deleteKeyMutation = trpc.translationKey.delete.useMutation({
     onSuccess: () => {
       toast.success("Key 已刪除");
@@ -702,6 +736,13 @@ export default function TranslationEditorOptimized() {
     },
     onError: (error) => {
       toast.error(`刪除失敗: ${error.message}`);
+    },
+  });
+
+  /** Used by the import flow — single round-trip for many keys. */
+  const batchCreateKeysMutation = trpc.translationKey.batchCreate.useMutation({
+    onError: (error) => {
+      toast.error(`批次建立 Key 失敗: ${error.message}`);
     },
   });
 
@@ -754,77 +795,136 @@ export default function TranslationEditorOptimized() {
     [buildLocalePairs]
   );
 
+  /** Trigger a server-built ZIP download with every active locale's JSON. */
   const handleExportAll = useCallback(() => {
-    if (locales.length === 0) return;
-    locales.forEach((l, i) => {
-      setTimeout(() => handleExportLocale(l.code), i * 250);
-    });
-  }, [locales, handleExportLocale]);
+    if (!selectedProject) return;
+    // Use a hidden anchor so the browser respects the server's
+    // Content-Disposition header for filename + download.
+    const a = document.createElement("a");
+    a.href = `/api/export/${selectedProject}.zip`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast.success("正在下載全部語系 ZIP…");
+  }, [selectedProject]);
 
   // ────────────────────────────────────────────────────────
-  // Import
+  // Import (multi-file)
   // ────────────────────────────────────────────────────────
-  const [pendingImportLocale, setPendingImportLocale] = useState<string | null>(null);
+  const triggerImportFilePicker = () => importInputRef.current?.click();
 
-  const handleImportTriggerFor = (localeCode: string) => {
-    setPendingImportLocale(localeCode);
-    importInputRef.current?.click();
-  };
-
-  const handleImportFileSelected = async (
+  /** Parse all selected files in parallel; build a preview that maps each file
+   * to a locale based on its filename (e.g. `zh-TW.json` → locale `zh-TW`). */
+  const handleImportFilesSelected = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    const file = e.target.files?.[0];
+    const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = "";
-    if (!file || !pendingImportLocale) return;
-    try {
-      const text = await file.text();
-      const obj = JSON.parse(text);
-      const flat = flattenJson(obj);
-      const count = Object.keys(flat).length;
-      if (count === 0) {
-        toast.error("檔案內沒有可匯入的翻譯");
-        return;
-      }
-      setImportFile({ file, parsed: flat, localeCode: pendingImportLocale });
-    } catch (err: any) {
-      toast.error(`無法解析 JSON：${err?.message ?? "格式錯誤"}`);
+    if (files.length === 0) return;
+
+    const lowerLocaleByCode = new Map<string, any>();
+    for (const l of locales as any[]) {
+      lowerLocaleByCode.set(l.code.toLowerCase(), l);
     }
+
+    const entries: ImportFileEntry[] = await Promise.all(
+      files.map(async (file): Promise<ImportFileEntry> => {
+        const stem = file.name.replace(/\.json$/i, "");
+        const matched = lowerLocaleByCode.get(stem.toLowerCase());
+        try {
+          const text = await file.text();
+          const obj = JSON.parse(text);
+          const flat = flattenJson(obj);
+          return {
+            fileName: file.name,
+            localeCode: matched?.code ?? null,
+            localeName: matched?.name ?? matched?.nativeName,
+            count: Object.keys(flat).length,
+            parsed: flat,
+            error: matched
+              ? Object.keys(flat).length === 0
+                ? "檔案內沒有可匯入的內容"
+                : undefined
+              : `檔名「${stem}」未對應任何已啟用的語系`,
+          };
+        } catch (err: any) {
+          return {
+            fileName: file.name,
+            localeCode: matched?.code ?? null,
+            localeName: matched?.name ?? matched?.nativeName,
+            count: 0,
+            error: `JSON 解析失敗：${err?.message ?? "格式錯誤"}`,
+          };
+        }
+      })
+    );
+    setImportPreview(entries);
   };
 
   const handleConfirmImport = async () => {
-    if (!importFile || !selectedProject) return;
-    const { parsed, localeCode } = importFile;
-    const existingByPath = new Map(allKeys.map((k: any) => [k.keyPath, k.id as number]));
-    let createdCount = 0;
-    let updatedCount = 0;
-    const updates: { keyId: number; localeCode: string; value: string }[] = [];
+    if (!importPreview || !selectedProject) return;
+
+    const valid = importPreview.filter((e) => e.localeCode && e.parsed && !e.error);
+    if (valid.length === 0) {
+      toast.error("沒有可匯入的檔案");
+      return;
+    }
+
+    // Aggregate every (keyPath, localeCode → value) once across all files
+    const allKeyPaths = new Set<string>();
+    const localesTouched = new Set<string>();
+    for (const entry of valid) {
+      localesTouched.add(entry.localeCode!);
+      for (const k of Object.keys(entry.parsed!)) allKeyPaths.add(k);
+    }
+
+    const existingByPath = new Map(
+      (allKeys as any[]).map((k) => [k.keyPath as string, k.id as number])
+    );
+    const missingPaths = Array.from(allKeyPaths).filter(
+      (p) => !existingByPath.has(p)
+    );
 
     try {
-      for (const [keyPath, value] of Object.entries(parsed)) {
-        let keyId = existingByPath.get(keyPath);
-        if (!keyId) {
-          const created = await createKeyMutation.mutateAsync({
-            projectId: selectedProject,
-            keyPath,
-          });
-          keyId = (created as any).id as number;
-          existingByPath.set(keyPath, keyId);
-          createdCount++;
+      // 1) ONE round-trip to create all missing keys (server returns the full
+      //    keyPath → id mapping, including pre-existing matches).
+      let createdCount = 0;
+      if (missingPaths.length > 0) {
+        const result = await batchCreateKeysMutation.mutateAsync({
+          projectId: selectedProject,
+          items: missingPaths.map((keyPath) => ({ keyPath })),
+        });
+        for (const { keyPath, id } of result.items) {
+          if (!existingByPath.has(keyPath)) createdCount++;
+          existingByPath.set(keyPath, id);
         }
-        updates.push({ keyId: keyId!, localeCode, value });
-        updatedCount++;
       }
+
+      // 2) Build the flat updates array — every (key, locale, value) tuple.
+      const updates: { keyId: number; localeCode: string; value: string }[] = [];
+      for (const entry of valid) {
+        for (const [keyPath, value] of Object.entries(entry.parsed!)) {
+          const keyId = existingByPath.get(keyPath);
+          if (!keyId) continue; // shouldn't happen after batchCreate
+          updates.push({ keyId, localeCode: entry.localeCode!, value });
+        }
+      }
+
+      // 3) ONE round-trip to write all translations.
       if (updates.length > 0) {
         await batchUpdateMutation.mutateAsync({
           updates,
           versionId: selectedVersion ?? undefined,
         });
       }
+
       toast.success(
-        `匯入完成 · 新增 ${createdCount} 個 Key、寫入 ${updatedCount} 個 ${localeCode} 翻譯`
+        `匯入完成 · ${localesTouched.size} 個語系、新增 ${createdCount} 個 Key、寫入 ${updates.length} 筆翻譯`
       );
-      setImportFile(null);
+      utils.translationKey.listByProject.invalidate();
+      utils.translationKey.listWithTranslations.invalidate();
+      setImportPreview(null);
     } catch (err: any) {
       toast.error(`匯入失敗：${err?.message ?? "未知錯誤"}`);
     }
@@ -863,6 +963,20 @@ export default function TranslationEditorOptimized() {
   const totalLocales = locales.length;
   const hasChanges = pendingUpdates.size > 0;
 
+  // keyId → keyPath, used by ProjectHistoryModal
+  const keyIdToPath = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const k of allKeys as any[]) {
+      m.set(k.id, k.keyPath);
+    }
+    return m;
+  }, [allKeys]);
+
+  const currentProjectName = useMemo(() => {
+    const p = (projects as any[]).find((x) => x.id === selectedProject);
+    return p?.name as string | undefined;
+  }, [projects, selectedProject]);
+
   // Compute minimum row width so many-locale layouts can scroll horizontally
   // instead of squeezing inputs and clipping the meta column.
   // Layout: pl(16) + KEY(280) + gap(12) + locales*(120 + 8 gap, less last) + 12 + META(160) + 12 + KEBAB(32) + pr(16)
@@ -881,7 +995,7 @@ export default function TranslationEditorOptimized() {
   // ────────────────────────────────────────────────────────
   return (
     <DashboardLayout>
-      <div className="flex flex-col h-[calc(100vh-3rem)] gap-2 max-w-[1600px] mx-auto w-full">
+      <div className="flex flex-col h-[calc(100vh-3rem)] gap-2 w-full">
         {/* ───────────── Project tab strip ───────────── */}
         <div className="flex items-center gap-1 overflow-x-auto scrollbar-elegant -mt-1">
           {openTabsList.map((p) => (
@@ -1024,6 +1138,18 @@ export default function TranslationEditorOptimized() {
               </>
             )}
 
+            {/* Project-level history quick-open */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => setShowProjectHistory(true)}
+              title="查看本專案的編輯歷程"
+            >
+              <History className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">歷程</span>
+            </Button>
+
             {/* Stat pills + sync indicator — pushed right */}
             <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
               <StatPill
@@ -1072,33 +1198,26 @@ export default function TranslationEditorOptimized() {
               />
             </div>
 
-            {/* Sort mode toggle — alphabetical or creation-time order */}
-            <div className="inline-flex h-9 rounded-md border border-border bg-muted/40 p-0.5 text-xs font-medium">
-              <button
-                type="button"
-                onClick={() => setSortMode("createdAt")}
-                className={`px-2.5 rounded-sm transition-colors ${
-                  sortMode === "createdAt"
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                title="新建立的 Key 排在最上面"
-              >
-                建立時間
-              </button>
-              <button
-                type="button"
-                onClick={() => setSortMode("alpha")}
-                className={`px-2.5 rounded-sm transition-colors ${
-                  sortMode === "alpha"
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                title="依 keyPath 字母順序"
-              >
-                字母順序
-              </button>
-            </div>
+            {/* "Sort by name" — persists alphabetical order to the DB */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={handleResortByName}
+              disabled={
+                !selectedProject ||
+                allKeys.length === 0 ||
+                resortMutation.isPending
+              }
+              title="依 keyPath 字母順序重排所有 Key 並寫回資料庫"
+            >
+              {resortMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ArrowDownAZ className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">依命名重排</span>
+            </Button>
 
             <Button
               onClick={() => setCreateKeyContext({ mode: "root" })}
@@ -1111,40 +1230,18 @@ export default function TranslationEditorOptimized() {
               新增 Key
             </Button>
 
-            {/* Import dropdown */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  disabled={!selectedProject || locales.length === 0}
-                  variant="outline"
-                  size="sm"
-                  className="h-9 gap-1.5"
-                  title="匯入 JSON"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">匯入</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuLabel className="text-xs">
-                  選擇匯入到哪個語系
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {locales.map((l) => (
-                  <DropdownMenuItem
-                    key={l.code}
-                    onClick={() => handleImportTriggerFor(l.code)}
-                    className="cursor-pointer"
-                  >
-                    <LocaleBadge code={l.code} size="sm" className="mr-2" />
-                    <span className="font-medium">{localeChineseName(l)}</span>
-                    <span className="text-muted-foreground ml-2 font-mono text-xs">
-                      {l.code}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {/* Import — single button, multi-select files; locale inferred from filename */}
+            <Button
+              disabled={!selectedProject || locales.length === 0}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={triggerImportFilePicker}
+              title="匯入 JSON（檔名 = 語系代碼，可一次選多檔）"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">匯入</span>
+            </Button>
 
             {/* Export dropdown */}
             <DropdownMenu>
@@ -1156,7 +1253,7 @@ export default function TranslationEditorOptimized() {
                   className="h-9 gap-1.5"
                   title="匯出 JSON"
                 >
-                  <Download className="h-3.5 w-3.5" />
+                  <Upload className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">匯出</span>
                 </Button>
               </DropdownMenuTrigger>
@@ -1166,7 +1263,7 @@ export default function TranslationEditorOptimized() {
                   className="cursor-pointer font-medium"
                 >
                   <FileJson className="h-4 w-4 mr-2 text-primary" />
-                  全部語系（每個一檔）
+                  全部語系（ZIP）
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel className="text-xs">單一語系</DropdownMenuLabel>
@@ -1186,12 +1283,13 @@ export default function TranslationEditorOptimized() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Hidden file input for import */}
+            {/* Hidden file input for import (multi-select) */}
             <input
               ref={importInputRef}
               type="file"
               accept="application/json,.json"
-              onChange={handleImportFileSelected}
+              multiple
+              onChange={handleImportFilesSelected}
               className="hidden"
             />
 
@@ -1436,6 +1534,16 @@ export default function TranslationEditorOptimized() {
           onClose={() => setHistoryKey(null)}
         />
 
+        {/* Project-level edit history */}
+        <ProjectHistoryModal
+          open={showProjectHistory}
+          projectId={selectedProject}
+          projectName={currentProjectName}
+          keyIdToPath={keyIdToPath}
+          userIdToName={userIdToName}
+          onClose={() => setShowProjectHistory(false)}
+        />
+
         <CreateKeyModal
           isOpen={createKeyContext !== null}
           parentPath={createKeyContext?.parentPath}
@@ -1497,44 +1605,83 @@ export default function TranslationEditorOptimized() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Import preview */}
+        {/* Import preview — multi-file */}
         <AlertDialog
-          open={importFile !== null}
-          onOpenChange={(open) => !open && setImportFile(null)}
+          open={importPreview !== null}
+          onOpenChange={(open) => !open && setImportPreview(null)}
         >
-          <AlertDialogContent>
+          <AlertDialogContent className="!max-w-2xl w-[min(94vw,720px)]">
             <AlertDialogHeader>
               <AlertDialogTitle className="flex items-center gap-2">
-                <Upload className="h-4 w-4 text-primary" />
+                <Download className="h-4 w-4 text-primary" />
                 匯入翻譯
               </AlertDialogTitle>
               <AlertDialogDescription asChild>
                 <div className="text-sm text-muted-foreground space-y-3">
                   <div>
-                    檔案：{" "}
-                    <span className="font-medium text-foreground">
-                      {importFile?.file.name}
-                    </span>
+                    共選了{" "}
+                    <span className="font-semibold text-foreground tabular-nums">
+                      {importPreview?.length ?? 0}
+                    </span>{" "}
+                    個檔案，將自動以檔名（去掉 .json）對應語系代碼匯入。
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span>目標語系：</span>
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono text-xs">
-                      {importFile?.localeCode && (
-                        <LocaleBadge code={importFile.localeCode} size="xs" />
-                      )}
-                      {importFile?.localeCode}
-                    </span>
-                  </div>
-                  {importFile && (
-                    <div className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed">
-                      將寫入{" "}
-                      <span className="font-semibold tabular-nums">
-                        {Object.keys(importFile.parsed).length}
-                      </span>{" "}
-                      個翻譯。檔案中存在但專案未有的 Key 會自動建立；
-                      已存在的 Key 會更新對應語系的翻譯值。
+
+                  {importPreview && importPreview.length > 0 && (
+                    <div className="rounded-lg border border-border/60 max-h-[40vh] overflow-y-auto scrollbar-elegant divide-y divide-border/60">
+                      {importPreview.map((entry, idx) => {
+                        const ok = !!entry.localeCode && !entry.error;
+                        return (
+                          <div
+                            key={idx}
+                            className={`flex items-center gap-3 px-3 py-2.5 ${
+                              ok ? "" : "bg-amber-500/5"
+                            }`}
+                          >
+                            {entry.localeCode ? (
+                              <LocaleBadge
+                                code={entry.localeCode}
+                                size="sm"
+                                className="shrink-0"
+                              />
+                            ) : (
+                              <span className="h-5 w-5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 inline-flex items-center justify-center text-[10px] font-bold shrink-0">
+                                ?
+                              </span>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <code className="font-mono text-xs text-foreground truncate">
+                                  {entry.fileName}
+                                </code>
+                                {entry.localeCode && (
+                                  <span className="text-xs text-muted-foreground shrink-0">
+                                    → {entry.localeName ?? entry.localeCode}
+                                  </span>
+                                )}
+                              </div>
+                              {entry.error ? (
+                                <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                                  {entry.error}
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-muted-foreground mt-0.5">
+                                  將寫入{" "}
+                                  <span className="font-semibold tabular-nums text-foreground">
+                                    {entry.count}
+                                  </span>{" "}
+                                  筆翻譯
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
+
+                  <div className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed">
+                    檔案中存在但專案未有的 Key 會自動建立；已存在的 Key 會更新對應語系的翻譯值。檔名沒比對到語系（如「customCode.json」）的檔案會被略過。
+                  </div>
                 </div>
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1546,10 +1693,12 @@ export default function TranslationEditorOptimized() {
                   handleConfirmImport();
                 }}
                 disabled={
-                  batchUpdateMutation.isPending || createKeyMutation.isPending
+                  batchUpdateMutation.isPending ||
+                  batchCreateKeysMutation.isPending ||
+                  !importPreview?.some((entry) => !!entry.localeCode && !entry.error)
                 }
               >
-                {batchUpdateMutation.isPending || createKeyMutation.isPending ? (
+                {batchUpdateMutation.isPending || batchCreateKeysMutation.isPending ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
                     匯入中…

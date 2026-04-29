@@ -278,10 +278,11 @@ export default function LocaleManager() {
                         ? "bg-card text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
+                    title="BCP-47 帶區域：zh-TW、ja-JP、en-US"
                   >
-                    完整碼
+                    區域碼
                     <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">
-                      zh-TW
+                      ja-JP
                     </span>
                   </button>
                   <button
@@ -292,10 +293,11 @@ export default function LocaleManager() {
                         ? "bg-card text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
+                    title="兩字短碼：tw、jp、us"
                   >
                     短碼
                     <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">
-                      tw
+                      jp
                     </span>
                   </button>
                 </div>

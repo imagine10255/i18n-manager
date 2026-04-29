@@ -164,6 +164,17 @@ export async function getAllProjects() {
     .orderBy(asc(projects.name));
 }
 
+export async function getProjectById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, id))
+    .limit(1);
+  return rows.length > 0 ? rows[0] : null;
+}
+
 export async function createProject(data: {
   name: string;
   description?: string;
@@ -240,6 +251,66 @@ export async function createTranslationKey(data: {
   return Number((result as any).insertId ?? 0);
 }
 
+/**
+ * Bulk-create translation keys for a project. Skips keyPaths that already exist
+ * (by re-selecting after the insert). Returns a `keyPath → id` mapping for
+ * every input path — both newly created AND pre-existing — so callers can wire
+ * up translations in a single batch follow-up.
+ */
+export async function createTranslationKeysBatch(input: {
+  projectId: number;
+  items: Array<{ keyPath: string; description?: string; tags?: string }>;
+  createdBy: number;
+}): Promise<Array<{ keyPath: string; id: number }>> {
+  const db = await getDb();
+  if (!db || input.items.length === 0) return [];
+
+  const allPaths = input.items.map((i) => i.keyPath);
+
+  // 1) Find which paths already exist for this project (de-dup before insert)
+  const existing = await db
+    .select({ id: translationKeys.id, keyPath: translationKeys.keyPath })
+    .from(translationKeys)
+    .where(
+      and(
+        eq(translationKeys.projectId, input.projectId),
+        inArray(translationKeys.keyPath, allPaths)
+      )
+    );
+  const existingPaths = new Set(existing.map((r: any) => r.keyPath));
+  const newRows = input.items
+    .filter((i) => !existingPaths.has(i.keyPath))
+    .map((i) => ({
+      projectId: input.projectId,
+      keyPath: i.keyPath,
+      description: i.description,
+      tags: i.tags,
+      createdBy: input.createdBy,
+    }));
+
+  // 2) Bulk insert the missing ones
+  if (newRows.length > 0) {
+    // Drizzle MySQL supports a single multi-row insert; chunk to be safe on
+    // very large imports (mysql max_allowed_packet etc.)
+    const CHUNK = 500;
+    for (let i = 0; i < newRows.length; i += CHUNK) {
+      await db.insert(translationKeys).values(newRows.slice(i, i + CHUNK));
+    }
+  }
+
+  // 3) Re-select to fetch the ids for every requested path (new + existing)
+  const all = await db
+    .select({ id: translationKeys.id, keyPath: translationKeys.keyPath })
+    .from(translationKeys)
+    .where(
+      and(
+        eq(translationKeys.projectId, input.projectId),
+        inArray(translationKeys.keyPath, allPaths)
+      )
+    );
+  return all.map((r: any) => ({ keyPath: r.keyPath as string, id: r.id as number }));
+}
+
 export async function updateTranslationKey(
   id: number,
   data: Partial<{
@@ -260,6 +331,26 @@ export async function softDeleteTranslationKey(id: number) {
     .update(translationKeys)
     .set({ isDeleted: true })
     .where(eq(translationKeys.id, id));
+}
+
+/**
+ * Bulk-update translationKeys.sortOrder. Used by the "依命名重排" action.
+ * `items` is a flat list of `{ id, sortOrder }`; we issue one UPDATE per row
+ * (Drizzle MySQL doesn't have a one-shot "update many rows with different
+ * values" helper; using a CASE WHEN expression is faster but harder to read,
+ * so we keep this simple — a few hundred rows is fine).
+ */
+export async function updateKeySortOrders(
+  items: Array<{ id: number; sortOrder: number }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  for (const { id, sortOrder } of items) {
+    await db
+      .update(translationKeys)
+      .set({ sortOrder })
+      .where(eq(translationKeys.id, id));
+  }
 }
 
 // ─── Translation queries ─────────────────────────────────────────────────────
@@ -324,6 +415,8 @@ export async function createTranslationHistory(data: {
 
 export async function getTranslationHistory(options?: {
   keyId?: number;
+  /** Restrict to a specific set of keyIds (e.g. all keys in a project). */
+  keyIds?: number[];
   localeCode?: string;
   changedBy?: number;
   versionId?: number;
@@ -335,6 +428,9 @@ export async function getTranslationHistory(options?: {
 
   const conditions: any[] = [];
   if (options?.keyId) conditions.push(eq(translationHistory.keyId, options.keyId));
+  if (options?.keyIds && options.keyIds.length > 0) {
+    conditions.push(inArray(translationHistory.keyId, options.keyIds));
+  }
   if (options?.localeCode)
     conditions.push(eq(translationHistory.localeCode, options.localeCode));
   if (options?.changedBy)

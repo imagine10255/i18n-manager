@@ -80,6 +80,10 @@ export const translationKeys = mysqlTable("translation_keys", {
   description: text("description"),
   tags: varchar("tags", { length: 256 }),
   isDeleted: boolean("isDeleted").default(false).notNull(),
+  /** Persisted display order — smaller = closer to top. Default 0 so newly
+   * created keys (untouched by the "依命名重排" action) tie with each other
+   * and the client tiebreaks by createdAt DESC, putting the freshest at top. */
+  sortOrder: int("sortOrder").default(0).notNull(),
   createdBy: int("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -87,6 +91,7 @@ export const translationKeys = mysqlTable("translation_keys", {
   index("idx_key_path").on(table.keyPath),
   index("idx_project_key").on(table.projectId, table.keyPath),
   index("idx_is_deleted").on(table.isDeleted),
+  index("idx_sort_order").on(table.sortOrder),
 ]);
 
 export type TranslationKey = typeof translationKeys.$inferSelect;

@@ -22,7 +22,9 @@ import {
   getTranslationKeys,
   getTranslationStats,
   getTranslationsByKeyIds,
+  createTranslationKeysBatch,
   softDeleteTranslationKey,
+  updateKeySortOrders,
   updateLocale,
   updateTranslationKey,
   updateUserRole,
@@ -286,6 +288,47 @@ const translationKeyRouter = router({
       });
       return { success: true };
     }),
+  /**
+   * Bulk-create keys for a project. Used by the import flow so we don't make
+   * one HTTP round-trip per missing key. Returns the full keyPath→id mapping
+   * (including pre-existing matches) so the caller can immediately wire up
+   * translations in a single follow-up batchUpdate.
+   */
+  batchCreate: editorProcedure
+    .input(
+      z.object({
+        projectId: z.number().int(),
+        items: z.array(
+          z.object({
+            keyPath: z.string().min(1).max(512),
+            description: z.string().optional(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const items = await createTranslationKeysBatch({
+        projectId: input.projectId,
+        items: input.items,
+        createdBy: ctx.user.id,
+      });
+      return { items };
+    }),
+  updateSortOrders: editorProcedure
+    .input(
+      z.object({
+        items: z.array(
+          z.object({
+            id: z.number().int(),
+            sortOrder: z.number().int(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input }) => {
+      await updateKeySortOrders(input.items);
+      return { success: true, updated: input.items.length };
+    }),
 });
 
 // ─── Translation router ───────────────────────────────────────────────────────
@@ -390,6 +433,7 @@ const translationRouter = router({
     .input(
       z.object({
         keyId: z.number().int().optional(),
+        projectId: z.number().int().optional(),
         localeCode: z.string().optional(),
         versionId: z.number().int().optional(),
         limit: z.number().int().default(50),
@@ -397,8 +441,17 @@ const translationRouter = router({
       })
     )
     .query(async ({ input }) => {
+      // When filtering by project, first translate that into a list of key ids
+      // (no projectId column on translation_history) and pass it down.
+      let projectKeyIds: number[] | undefined;
+      if (input.projectId !== undefined) {
+        const projectKeys = await getTranslationKeys({ projectId: input.projectId });
+        projectKeyIds = projectKeys.map((k: any) => k.id);
+        if (projectKeyIds.length === 0) return [];
+      }
       return getTranslationHistory({
         keyId: input.keyId,
+        keyIds: projectKeyIds,
         localeCode: input.localeCode,
         versionId: input.versionId,
         limit: input.limit,
