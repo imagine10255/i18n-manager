@@ -20,7 +20,8 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { X } from "lucide-react";
@@ -36,7 +37,7 @@ const ACTION_STYLES = {
   delete: { label: "刪除", icon: Minus, className: "bg-red-100 text-red-700 border-red-200" },
 };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 200;
 
 export default function HistoryPage() {
   const [, setLocation] = useLocation();
@@ -108,6 +109,27 @@ export default function HistoryPage() {
   const total = historyData?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+
+  const filteredItems = useMemo(
+    () =>
+      (items as any[]).filter(
+        (item) => !filterAction || item.action === filterAction
+      ),
+    [items, filterAction]
+  );
+
+  // ── Virtualized list (handles up to PAGE_SIZE=200 records smoothly) ──
+  const listRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: filteredItems.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 110,
+    overscan: 8,
+    measureElement:
+      typeof window !== "undefined"
+        ? (el) => el.getBoundingClientRect().height
+        : undefined,
+  });
 
   return (
     <DashboardLayout>
@@ -219,23 +241,49 @@ export default function HistoryPage() {
                   </div>
                 ))}
               </div>
-            ) : items.length === 0 ? (
+            ) : filteredItems.length === 0 ? (
               <div className="text-center py-16 text-muted-foreground">
                 <Clock className="h-10 w-10 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">尚無修改記錄</p>
               </div>
             ) : (
-              <div className="divide-y divide-border/30">
-                {items
-                  .filter((item: any) => !filterAction || item.action === filterAction)
-                  .map((item: any) => {
-                    const actionStyle = ACTION_STYLES[item.action as keyof typeof ACTION_STYLES] ?? ACTION_STYLES.update;
+              <div
+                ref={listRef}
+                className="overflow-y-auto scrollbar-elegant"
+                style={{ maxHeight: "calc(100vh - 320px)" }}
+              >
+                <div
+                  style={{
+                    height: `${virtualizer.getTotalSize()}px`,
+                    width: "100%",
+                    position: "relative",
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((vItem) => {
+                    const item: any = filteredItems[vItem.index];
+                    const actionStyle =
+                      ACTION_STYLES[
+                        item.action as keyof typeof ACTION_STYLES
+                      ] ?? ACTION_STYLES.update;
                     const ActionIcon = actionStyle.icon;
-
                     return (
-                      <div key={item.id} className="flex gap-4 px-5 py-4 hover:bg-secondary/20 transition-colors">
+                      <div
+                        key={item.id ?? vItem.key}
+                        ref={virtualizer.measureElement}
+                        data-index={vItem.index}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className="flex gap-4 px-5 py-4 hover:bg-secondary/20 transition-colors border-b border-border/30"
+                      >
                         {/* Action icon */}
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${actionStyle.className}`}>
+                        <div
+                          className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${actionStyle.className}`}
+                        >
                           <ActionIcon className="h-3 w-3" />
                         </div>
 
@@ -243,27 +291,33 @@ export default function HistoryPage() {
                         <div className="flex-1 min-w-0 space-y-2">
                           <div className="flex items-center flex-wrap gap-2">
                             <code className="text-xs font-mono bg-secondary px-2 py-0.5 rounded text-foreground/80">
-                              {(item as { keyPath?: string }).keyPath ?? `Key #${item.keyId}`}
+                              {(item as { keyPath?: string }).keyPath ??
+                                `Key #${item.keyId}`}
                             </code>
-                            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${actionStyle.className}`}>
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] px-1.5 py-0 ${actionStyle.className}`}
+                            >
                               {actionStyle.label}
                             </Badge>
                             <span className="text-xs text-muted-foreground">
-                              {FLAG_MAP[item.localeCode] ?? "🌐"} {item.localeCode}
+                              {FLAG_MAP[item.localeCode] ?? "🌐"}{" "}
+                              {item.localeCode}
                             </span>
                           </div>
 
                           {/* Value diff */}
                           {item.action !== "delete" && (
                             <div className="flex items-start gap-2 text-xs">
-                              {item.action === "update" && item.oldValue !== null && (
-                                <>
-                                  <span className="px-2 py-1 rounded bg-red-50 text-red-700 border border-red-100 line-through max-w-xs truncate">
-                                    {item.oldValue || "(空)"}
-                                  </span>
-                                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
-                                </>
-                              )}
+                              {item.action === "update" &&
+                                item.oldValue !== null && (
+                                  <>
+                                    <span className="px-2 py-1 rounded bg-red-50 text-red-700 border border-red-100 line-through max-w-xs truncate">
+                                      {item.oldValue || "(空)"}
+                                    </span>
+                                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
+                                  </>
+                                )}
                               <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-100 max-w-xs truncate">
                                 {item.newValue || "(空)"}
                               </span>
@@ -273,23 +327,28 @@ export default function HistoryPage() {
                           {/* Meta */}
                           <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                             <span className="font-medium">
-                              {(item as { changerName?: string | null }).changerName ?? "未知使用者"}
+                              {(item as { changerName?: string | null })
+                                .changerName ?? "未知使用者"}
                             </span>
                             <span>·</span>
                             <span>
-                              {new Date(item.changedAt).toLocaleString("zh-TW", {
-                                year: "numeric",
-                                month: "2-digit",
-                                day: "2-digit",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
+                              {new Date(item.changedAt).toLocaleString(
+                                "zh-TW",
+                                {
+                                  year: "numeric",
+                                  month: "2-digit",
+                                  day: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )}
                             </span>
                           </div>
                         </div>
                       </div>
                     );
                   })}
+                </div>
               </div>
             )}
           </CardContent>

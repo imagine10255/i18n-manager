@@ -8,7 +8,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Settings2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -62,10 +64,14 @@ export default function ProjectSettingsModal({
 
   const [allMode, setAllMode] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
 
   // Sync from server when the modal opens / project loads
   useEffect(() => {
     if (open && project) {
+      setName(project.name ?? "");
+      setDescription(project.description ?? "");
       if (initialSelection === null) {
         setAllMode(true);
         setSelected(new Set());
@@ -87,8 +93,14 @@ export default function ProjectSettingsModal({
 
   const handleSave = () => {
     if (!projectId) return;
+    if (!name.trim()) {
+      toast.error("專案名稱不能為空");
+      return;
+    }
     updateMutation.mutate({
       id: projectId,
+      name: name.trim(),
+      description: description.trim() || undefined,
       allowedLocaleCodes: allMode ? null : Array.from(selected),
     });
   };
@@ -113,7 +125,41 @@ export default function ProjectSettingsModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-5">
+          {/* Project basics — name + description */}
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="project-name" className="text-xs">
+                專案名稱 *
+              </Label>
+              <Input
+                id="project-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：gameStream"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="project-desc" className="text-xs">
+                描述（選填）
+              </Label>
+              <Textarea
+                id="project-desc"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="專案描述、用途、所屬團隊…"
+                rows={2}
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          {/* Locale whitelist */}
+          <div className="pt-3 border-t border-border/60 space-y-3">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+              可用語系
+            </Label>
           {/* Mode toggle: all vs subset */}
           <div className="flex gap-2">
             <Button
@@ -185,6 +231,7 @@ export default function ProjectSettingsModal({
               此專案會自動使用所有「啟用中」的語系。新增語系時也會自動納入。
             </p>
           )}
+          </div>
         </div>
 
         <DialogFooter>
