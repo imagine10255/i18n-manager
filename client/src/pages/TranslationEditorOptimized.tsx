@@ -1376,6 +1376,17 @@ export default function TranslationEditorOptimized() {
 
             {/* "Sort by name" — persists alphabetical order to the DB */}
             <Button
+              onClick={() => setCreateKeyContext({ mode: "root" })}
+              disabled={!selectedProject}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新增 Key
+            </Button>
+
+            <Button
               variant="outline"
               size="sm"
               className="h-9 gap-1.5"
@@ -1393,17 +1404,6 @@ export default function TranslationEditorOptimized() {
                 <ArrowDownAZ className="h-3.5 w-3.5" />
               )}
               <span className="hidden sm:inline">依命名重排</span>
-            </Button>
-
-            <Button
-              onClick={() => setCreateKeyContext({ mode: "root" })}
-              disabled={!selectedProject}
-              variant="outline"
-              size="sm"
-              className="h-9 gap-1.5"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新增 Key
             </Button>
 
             {/* Import — single button, multi-select files; locale inferred from filename */}
@@ -1744,6 +1744,9 @@ export default function TranslationEditorOptimized() {
           isOpen={createKeyContext !== null}
           parentPath={createKeyContext?.parentPath}
           insertMode={createKeyContext?.mode ?? "root"}
+          existingKeyPaths={
+            new Set((allKeys as any[]).map((k) => k.keyPath as string))
+          }
           onConfirm={async (keyPath, description) => {
             await handleCreateKey(keyPath, description);
             setCreateKeyContext(null);

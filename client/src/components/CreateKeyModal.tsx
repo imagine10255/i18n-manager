@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { CornerDownRight } from "lucide-react";
+import { AlertCircle, CornerDownRight } from "lucide-react";
 
 interface CreateKeyModalProps {
   isOpen: boolean;
@@ -23,6 +23,8 @@ interface CreateKeyModalProps {
   parentPath?: string;
   /** Optional human-readable hint about what's being inserted (sibling vs child). */
   insertMode?: "sibling" | "child" | "root";
+  /** Existing keyPaths in this project — used for instant duplicate feedback. */
+  existingKeyPaths?: Set<string>;
   onConfirm: (keyPath: string, description: string) => void;
   onCancel: () => void;
   isLoading?: boolean;
@@ -32,6 +34,7 @@ export default function CreateKeyModal({
   isOpen,
   parentPath,
   insertMode = "root",
+  existingKeyPaths,
   onConfirm,
   onCancel,
   isLoading = false,
@@ -55,7 +58,10 @@ export default function CreateKeyModal({
   const finalPath = usingParent
     ? `${parentPath}.${leaf.trim()}`.replace(/\.+$/g, "")
     : fullPath.trim();
-  const canSubmit = usingParent ? !!leaf.trim() : !!fullPath.trim();
+  const isDuplicate =
+    !!finalPath && !!existingKeyPaths?.has(finalPath);
+  const canSubmit =
+    (usingParent ? !!leaf.trim() : !!fullPath.trim()) && !isDuplicate;
 
   const handleConfirm = () => {
     if (!canSubmit) return;
@@ -111,12 +117,22 @@ export default function CreateKeyModal({
                   autoFocus
                 />
               </div>
-              {leaf.trim() && (
+              {leaf.trim() && !isDuplicate && (
                 <p className="text-xs text-muted-foreground">
                   完整路徑：
                   <code className="font-mono bg-muted px-1.5 py-0.5 rounded">
                     {finalPath}
                   </code>
+                </p>
+              )}
+              {isDuplicate && (
+                <p className="text-xs text-destructive flex items-center gap-1.5">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  Key{" "}
+                  <code className="font-mono bg-destructive/10 px-1 py-0.5 rounded">
+                    {finalPath}
+                  </code>{" "}
+                  已存在
                 </p>
               )}
             </div>
@@ -129,12 +145,23 @@ export default function CreateKeyModal({
                 value={fullPath}
                 onChange={(e) => setFullPath(e.target.value)}
                 disabled={isLoading}
-                className="font-mono"
+                className={`font-mono ${isDuplicate ? "border-destructive focus-visible:ring-destructive/30" : ""}`}
                 autoFocus
               />
-              <p className="text-xs text-muted-foreground">
-                使用點號（.）分隔層級，例如：module.section.item
-              </p>
+              {isDuplicate ? (
+                <p className="text-xs text-destructive flex items-center gap-1.5">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  Key{" "}
+                  <code className="font-mono bg-destructive/10 px-1 py-0.5 rounded">
+                    {finalPath}
+                  </code>{" "}
+                  已存在於此專案
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  使用點號（.）分隔層級，例如：module.section.item
+                </p>
+              )}
             </div>
           )}
 

@@ -308,6 +308,18 @@ const translationKeyRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Reject duplicates inside the same project (ignoring soft-deleted rows).
+      const existing = await getTranslationKeys({
+        projectId: input.projectId,
+      });
+      if (
+        (existing as any[]).some((k: any) => k.keyPath === input.keyPath)
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Key「${input.keyPath}」已經存在於此專案`,
+        });
+      }
       const id = await createTranslationKey({
         ...input,
         createdBy: ctx.user.id,
