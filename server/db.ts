@@ -333,6 +333,16 @@ export async function softDeleteTranslationKey(id: number) {
     .where(eq(translationKeys.id, id));
 }
 
+/** Soft-delete many keys in a single statement. */
+export async function softDeleteTranslationKeys(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return;
+  await db
+    .update(translationKeys)
+    .set({ isDeleted: true })
+    .where(inArray(translationKeys.id, ids));
+}
+
 /**
  * Bulk-update translationKeys.sortOrder. Used by the "依命名重排" action.
  * `items` is a flat list of `{ id, sortOrder }`; we issue one UPDATE per row

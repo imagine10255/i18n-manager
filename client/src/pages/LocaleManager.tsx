@@ -17,7 +17,7 @@ import { trpc } from "@/lib/trpc";
 import { Globe, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { LocaleBadge } from "@/components/LocaleBadge";
+import { LocaleFlag } from "@/components/LocaleFlag";
 import { LOCALE_PRESETS, type LocalePreset } from "@/lib/localePresets";
 
 type CodeStyle = "long" | "short";
@@ -171,7 +171,7 @@ export default function LocaleManager() {
                     key={locale.id}
                     className="flex items-center gap-4 p-3 rounded-lg border border-border/60 hover:bg-muted/40 transition-colors group"
                   >
-                    <LocaleBadge code={locale.code} size="lg" />
+                    <LocaleFlag code={locale.code} size="lg" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-sm">
@@ -334,7 +334,7 @@ export default function LocaleManager() {
                                     : "border-border/60 hover:border-primary/50 hover:bg-card"
                                 }`}
                               >
-                                <LocaleBadge code={preset.code} size="md" />
+                                <LocaleFlag code={preset.code} size="md" />
                                 <div className="min-w-0 flex-1">
                                   <div className="text-sm font-medium truncate">
                                     {preset.name}
@@ -358,7 +358,7 @@ export default function LocaleManager() {
                 <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">
                   <span>送出前可微調</span>
                   {form.code && (
-                    <LocaleBadge code={form.code} size="sm" />
+                    <LocaleFlag code={form.code} size="sm" />
                   )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { ArrowRight, Clock, History, Minus, Plus, RefreshCw, Search } from "lucide-react";
-import { LocaleBadge } from "./LocaleBadge";
+import { LocaleFlag } from "./LocaleFlag";
 import { findPreset } from "@/lib/localePresets";
 import { useMemo, useState } from "react";
 import { Input } from "./ui/input";
@@ -173,7 +173,7 @@ export default function ProjectHistoryModal({
                         </span>
                         {!isWildcard && (
                           <>
-                            <LocaleBadge code={r.localeCode} size="xs" />
+                            <LocaleFlag code={r.localeCode} size="xs" />
                             <span className="text-xs text-muted-foreground font-mono">
                               {findPreset(r.localeCode)?.name ?? r.localeCode}
                             </span>

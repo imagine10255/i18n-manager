@@ -84,6 +84,33 @@ export const LOCALE_PRESETS: LocalePreset[] = [
 ];
 
 /**
+ * Convert a 2-letter ISO country/region code to its emoji flag — works by
+ * mapping each ASCII letter to the corresponding regional indicator codepoint.
+ * Falls back to the globe emoji when the input isn't a valid pair.
+ */
+export function flagEmoji(twoLetter: string | undefined | null): string {
+  if (!twoLetter || twoLetter.length !== 2) return "🌐";
+  const upper = twoLetter.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(upper)) return "🌐";
+  const A = "A".charCodeAt(0);
+  const RI = 0x1f1e6;
+  return String.fromCodePoint(
+    RI + (upper.charCodeAt(0) - A),
+    RI + (upper.charCodeAt(1) - A)
+  );
+}
+
+/** Resolve an emoji flag for a locale code, using its preset (if any). */
+export function flagFor(code: string): string {
+  const p = findPreset(code);
+  if (p) return flagEmoji(p.shortCode);
+  // Last-resort heuristics: try parsing the BCP-47 region or 2-letter code
+  const parts = code.split(/[-_]/);
+  if (parts.length > 1) return flagEmoji(parts[1]);
+  return flagEmoji(parts[0]);
+}
+
+/**
  * Look up a preset by any of its three forms (BCP-47 / language / short alias),
  * case-insensitively. Returns the most specific match — preferring exact `code`
  * matches over `langCode` matches over `shortCode` matches.

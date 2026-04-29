@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { LocaleBadge } from "@/components/LocaleBadge";
+import { LocaleFlag } from "@/components/LocaleFlag";
 import { findPreset } from "@/lib/localePresets";
 
 /** Resolve a locale's Chinese display name with fallbacks. */
@@ -236,7 +236,15 @@ export default function TranslationEditorOptimized() {
     parentPath?: string;
     mode: "root" | "sibling" | "child";
   } | null>(null);
-  const [deletingKey, setDeletingKey] = useState<{ id: number; path: string } | null>(null);
+  /**
+   * State for the "confirm delete" dialog. `ids` lets us cover both single-leaf
+   * deletes (1 entry) and folder deletes (many entries).
+   */
+  const [deletingKey, setDeletingKey] = useState<{
+    ids: number[];
+    path: string;
+    isFolder?: boolean;
+  } | null>(null);
   const [historyKey, setHistoryKey] = useState<{ id: number; path: string } | null>(null);
   const [showProjectHistory, setShowProjectHistory] = useState(false);
   /** Per-file parse result. `localeCode` is null when filename didn't match any locale. */
@@ -727,9 +735,9 @@ export default function TranslationEditorOptimized() {
     resortMutation.mutate({ items });
   }, [allKeys, resortMutation]);
 
-  const deleteKeyMutation = trpc.translationKey.delete.useMutation({
-    onSuccess: () => {
-      toast.success("Key 已刪除");
+  const batchDeleteMutation = trpc.translationKey.batchDelete.useMutation({
+    onSuccess: (data) => {
+      toast.success(`已刪除 ${data.deleted} 個 Key`);
       utils.translationKey.listByProject.invalidate();
       utils.translationKey.listWithTranslations.invalidate();
       setDeletingKey(null);
@@ -934,9 +942,22 @@ export default function TranslationEditorOptimized() {
   // Delete
   // ────────────────────────────────────────────────────────
   const handleConfirmDelete = async () => {
-    if (!deletingKey) return;
-    await deleteKeyMutation.mutateAsync({ id: deletingKey.id });
+    if (!deletingKey || deletingKey.ids.length === 0) return;
+    await batchDeleteMutation.mutateAsync({ ids: deletingKey.ids });
   };
+
+  /** Walk a folder subtree and collect all leaf keyIds (handles arbitrary depth). */
+  const collectLeafKeyIds = useCallback(
+    (folderPath: string): number[] => {
+      const prefix = folderPath + ".";
+      return (allKeys as any[])
+        .filter(
+          (k: any) => k.keyPath === folderPath || k.keyPath.startsWith(prefix)
+        )
+        .map((k: any) => k.id as number);
+    },
+    [allKeys]
+  );
 
   // 鍵盤快速鍵
   useEffect(() => {
@@ -1273,7 +1294,7 @@ export default function TranslationEditorOptimized() {
                     onClick={() => handleExportLocale(l.code)}
                     className="cursor-pointer"
                   >
-                    <LocaleBadge code={l.code} size="sm" className="mr-2" />
+                    <LocaleFlag code={l.code} size="sm" className="mr-2" />
                     <span className="font-medium">{localeChineseName(l)}</span>
                     <span className="text-muted-foreground ml-2 font-mono text-xs">
                       {l.code}.json
@@ -1388,16 +1409,22 @@ export default function TranslationEditorOptimized() {
                 </div>
                 {/* Scrolling: locale columns */}
                 <div className={`${LOCALES_COL} flex items-center bg-muted/95 backdrop-blur-sm`}>
-                  <div className="flex gap-2 px-3 py-2.5">
+                  <div className="flex gap-2 px-3 py-2">
                     {locales.map((locale) => (
                       <div
                         key={locale.code}
-                        className="flex-1 min-w-[120px] flex items-center gap-1.5"
+                        className="flex-1 min-w-[120px] flex items-center gap-2"
+                        title={`${localeChineseName(locale)} (${locale.code})`}
                       >
-                        <LocaleBadge code={locale.code} size="sm" />
-                        <span className="normal-case truncate text-foreground/90">
-                          {localeChineseName(locale)}
-                        </span>
+                        <LocaleFlag code={locale.code} size="md" />
+                        <div className="flex flex-col leading-tight min-w-0">
+                          <span className="normal-case truncate text-[13px] font-medium text-foreground">
+                            {localeChineseName(locale)}
+                          </span>
+                          <span className="font-mono text-[10px] text-muted-foreground/80 truncate">
+                            {locale.code}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1461,6 +1488,15 @@ export default function TranslationEditorOptimized() {
                               mode: "child",
                             })
                           }
+                          onRequestDelete={() => {
+                            const ids = collectLeafKeyIds(node.fullPath);
+                            if (ids.length === 0) return;
+                            setDeletingKey({
+                              ids,
+                              path: node.fullPath,
+                              isFolder: true,
+                            });
+                          }}
                         />
                       ) : (
                         <LeafRow
@@ -1473,7 +1509,7 @@ export default function TranslationEditorOptimized() {
                           onChange={handleCellChange}
                           onOpenModal={handleOpenEditModal}
                           onRequestDelete={(id, path) =>
-                            setDeletingKey({ id, path })
+                            setDeletingKey({ ids: [id], path })
                           }
                           onInsertSibling={(parentPath) =>
                             setCreateKeyContext({
@@ -1565,16 +1601,32 @@ export default function TranslationEditorOptimized() {
             <AlertDialogHeader>
               <AlertDialogTitle className="flex items-center gap-2">
                 <Trash2 className="h-4 w-4 text-destructive" />
-                確定刪除此 Key？
+                {deletingKey?.isFolder ? "確定刪除整個群組？" : "確定刪除此 Key？"}
               </AlertDialogTitle>
               <AlertDialogDescription asChild>
                 <div className="text-sm text-muted-foreground space-y-2">
                   <div>
-                    將軟刪除 Key{" "}
-                    <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-                      {deletingKey?.path}
-                    </code>{" "}
-                    及其所有語系翻譯。
+                    {deletingKey?.isFolder ? (
+                      <>
+                        將軟刪除群組{" "}
+                        <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                          {deletingKey?.path}
+                        </code>{" "}
+                        底下的所有 Key（共{" "}
+                        <span className="font-semibold tabular-nums text-foreground">
+                          {deletingKey?.ids.length ?? 0}
+                        </span>{" "}
+                        筆）及對應的所有語系翻譯。
+                      </>
+                    ) : (
+                      <>
+                        將軟刪除 Key{" "}
+                        <code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                          {deletingKey?.path}
+                        </code>{" "}
+                        及其所有語系翻譯。
+                      </>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground/80">
                     此動作會記錄在修改歷程中，必要時可由管理員復原。
@@ -1589,10 +1641,10 @@ export default function TranslationEditorOptimized() {
                   e.preventDefault();
                   handleConfirmDelete();
                 }}
-                disabled={deleteKeyMutation.isPending}
+                disabled={batchDeleteMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {deleteKeyMutation.isPending ? (
+                {batchDeleteMutation.isPending ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
                     刪除中…
@@ -1638,7 +1690,7 @@ export default function TranslationEditorOptimized() {
                             }`}
                           >
                             {entry.localeCode ? (
-                              <LocaleBadge
+                              <LocaleFlag
                                 code={entry.localeCode}
                                 size="sm"
                                 className="shrink-0"
@@ -1822,6 +1874,7 @@ function FolderRow({
   leafCount,
   onInsertSibling,
   onInsertChild,
+  onRequestDelete,
 }: {
   node: TreeNode;
   isExpanded: boolean;
@@ -1829,6 +1882,7 @@ function FolderRow({
   leafCount: number;
   onInsertSibling: () => void;
   onInsertChild: () => void;
+  onRequestDelete: () => void;
 }) {
   // Folder uses a slightly stronger surface than the regular card so it stands out
   const cellBg = "bg-muted group-hover/folder:bg-secondary transition-colors";
@@ -1917,6 +1971,16 @@ function FolderRow({
             >
               <Plus className="h-4 w-4 mr-2" />
               新增同層 Key
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                onRequestDelete();
+              }}
+              className="cursor-pointer text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              刪除整個群組
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

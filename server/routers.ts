@@ -24,6 +24,7 @@ import {
   getTranslationsByKeyIds,
   createTranslationKeysBatch,
   softDeleteTranslationKey,
+  softDeleteTranslationKeys,
   updateKeySortOrders,
   updateLocale,
   updateTranslationKey,
@@ -287,6 +288,28 @@ const translationKeyRouter = router({
         action: "delete",
       });
       return { success: true };
+    }),
+  /**
+   * Bulk soft-delete a list of keys (used when removing an entire folder /
+   * group from the tree). Records one history entry per affected key.
+   */
+  batchDelete: editorProcedure
+    .input(z.object({ ids: z.array(z.number().int()).min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      await softDeleteTranslationKeys(input.ids);
+      // History records — one per id, with the wildcard locale to indicate
+      // "the whole key" (matches the existing single-delete convention).
+      for (const id of input.ids) {
+        await createTranslationHistory({
+          keyId: id,
+          localeCode: "*",
+          oldValue: null,
+          newValue: null,
+          changedBy: ctx.user.id,
+          action: "delete",
+        });
+      }
+      return { success: true, deleted: input.ids.length };
     }),
   /**
    * Bulk-create keys for a project. Used by the import flow so we don't make
