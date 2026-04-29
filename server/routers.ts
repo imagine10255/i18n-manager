@@ -1,8 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { ENV } from "./_core/env";
+import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { translationHistory } from "../drizzle/schema";
@@ -25,6 +27,7 @@ import {
   updateTranslationKey,
   updateUserRole,
   upsertTranslation,
+  upsertUser,
   getAllProjects,
   createProject,
   getVersionsByProject,
@@ -448,10 +451,25 @@ export const appRouter = router({
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      return { success: true } as const;
     }),
+    localLogin: publicProcedure
+      .input(z.object({ username: z.string(), password: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        if (!ENV.localAuthUsername || !ENV.localAuthPassword) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "本地登入未設定" });
+        }
+        if (input.username !== ENV.localAuthUsername || input.password !== ENV.localAuthPassword) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "帳號或密碼錯誤" });
+        }
+        const openId = ENV.ownerOpenId || input.username;
+        const name = ENV.ownerName || input.username;
+        await upsertUser({ openId, name, email: null, loginMethod: "local", lastSignedIn: new Date() });
+        const token = await sdk.createSessionToken(openId, { name, expiresInMs: ONE_YEAR_MS });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        return { success: true } as const;
+      }),
   }),
   locale: localeRouter,
   project: projectRouter,

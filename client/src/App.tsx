@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Dashboard from "./pages/Dashboard";
 import LocaleManager from "./pages/LocaleManager";
+import Login from "./pages/Login";
 import TranslationEditorOptimized from "./pages/TranslationEditorOptimized";
 import HistoryPage from "./pages/HistoryPage";
 import UserManager from "./pages/UserManager";
@@ -15,6 +16,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/login" component={Login} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/locales" component={LocaleManager} />
       <Route path="/editor" component={TranslationEditorOptimized} />

@@ -40,6 +40,7 @@ import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
+import { ThemeToggle } from "./ThemeToggle";
 
 type MenuItem = {
   icon: React.ElementType;
@@ -105,11 +106,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-background to-secondary/30">
-        <div className="flex flex-col items-center gap-8 p-10 max-w-sm w-full">
+      <div className="relative flex items-center justify-center min-h-screen aurora-bg overflow-hidden px-4">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full opacity-40 blur-3xl"
+          style={{ background: "var(--gradient-primary)" }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full opacity-30 blur-3xl"
+          style={{ background: "var(--gradient-accent)" }}
+        />
+        <div className="relative flex flex-col items-center gap-8 p-10 max-w-sm w-full animate-fade-in-up">
           <div className="flex flex-col items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-2">
-              <Globe className="w-6 h-6 text-primary" />
+            <div
+              className="w-14 h-14 rounded-2xl flex items-center justify-center mb-2 glow"
+              style={{ background: "var(--gradient-primary)" }}
+            >
+              <Globe className="w-7 h-7 text-white" strokeWidth={2.2} />
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-center">
               多語系翻譯管理系統
@@ -209,11 +223,14 @@ function DashboardLayoutContent({
                 <PanelLeft className="h-4 w-4 text-sidebar-foreground/60" />
               </button>
               {!isCollapsed && (
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-6 h-6 rounded-md bg-sidebar-primary/20 flex items-center justify-center shrink-0">
-                    <Globe className="w-3.5 h-3.5 text-sidebar-primary" />
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-[0_4px_12px_rgba(124,58,237,0.35)]"
+                    style={{ background: "var(--gradient-primary)" }}
+                  >
+                    <Globe className="w-4 h-4 text-white" strokeWidth={2.4} />
                   </div>
-                  <span className="font-semibold text-sm text-sidebar-foreground truncate">
+                  <span className="font-semibold text-sm text-sidebar-foreground truncate tracking-tight">
                     i18n Manager
                   </span>
                 </div>
@@ -239,13 +256,21 @@ function DashboardLayoutContent({
                           isActive={isActive}
                           onClick={() => setLocation(item.path)}
                           tooltip={item.label}
-                          className={`h-9 rounded-lg transition-all font-normal text-sm ${
+                          className={`group/menu relative h-9 rounded-lg transition-all font-normal text-sm ${
                             isActive
                               ? "bg-sidebar-primary/15 text-sidebar-primary font-medium"
                               : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
                           }`}
                         >
-                          <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} />
+                          {/* Active accent bar */}
+                          {isActive && !isCollapsed && (
+                            <span
+                              aria-hidden
+                              className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full"
+                              style={{ background: "var(--gradient-primary)" }}
+                            />
+                          )}
+                          <item.icon className={`h-4 w-4 shrink-0 transition-colors ${isActive ? "text-sidebar-primary" : "group-hover/menu:text-sidebar-foreground"}`} />
                           <span>{item.label}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
@@ -257,7 +282,15 @@ function DashboardLayoutContent({
           </SidebarContent>
 
           {/* Footer */}
-          <SidebarFooter className="p-3 border-t border-sidebar-border/50">
+          <SidebarFooter className="p-3 border-t border-sidebar-border/50 gap-2">
+            {!isCollapsed && (
+              <div className="flex items-center justify-between px-1.5">
+                <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
+                  外觀
+                </span>
+                <ThemeToggle align="end" side="top" />
+              </div>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-sidebar-accent transition-colors w-full text-left focus:outline-none group">
@@ -310,19 +343,23 @@ function DashboardLayoutContent({
       <SidebarInset>
         {/* Mobile header */}
         {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-4 backdrop-blur sticky top-0 z-40">
+          <div className="flex border-b border-border/60 h-14 items-center justify-between surface-glass px-4 sticky top-0 z-40">
             <div className="flex items-center gap-3">
               <SidebarTrigger className="h-8 w-8 rounded-lg" />
               <span className="font-medium text-sm">{activeItem?.label ?? "i18n Manager"}</span>
             </div>
+            <ThemeToggle align="end" />
           </div>
         )}
 
         {/* Page header */}
         {!isMobile && activeItem && (
-          <div className="flex items-center gap-3 px-6 py-4 border-b bg-background/80 backdrop-blur sticky top-0 z-30">
-            <activeItem.icon className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium text-foreground">{activeItem.label}</span>
+          <div className="flex items-center justify-between px-6 py-3 border-b border-border/60 surface-glass sticky top-0 z-30">
+            <div className="flex items-center gap-2.5">
+              <activeItem.icon className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">{activeItem.label}</span>
+            </div>
+            <ThemeToggle align="end" />
           </div>
         )}
 
