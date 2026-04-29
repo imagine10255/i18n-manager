@@ -74,7 +74,7 @@ export default function ProjectHistoryModal({
     { projectId: projectId ?? 0, limit: 300 },
     { enabled: open && projectId !== null }
   );
-  const records = (query.data ?? []) as any[];
+  const records = ((query.data as any)?.items ?? []) as any[];
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

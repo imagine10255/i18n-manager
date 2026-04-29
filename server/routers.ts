@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { ENV } from "./_core/env";
@@ -470,16 +471,25 @@ const translationRouter = router({
       if (input.projectId !== undefined) {
         const projectKeys = await getTranslationKeys({ projectId: input.projectId });
         projectKeyIds = projectKeys.map((k: any) => k.id);
-        if (projectKeyIds.length === 0) return [];
+        if (projectKeyIds.length === 0) return { items: [], total: 0 };
       }
-      return getTranslationHistory({
-        keyId: input.keyId,
-        keyIds: projectKeyIds,
-        localeCode: input.localeCode,
-        versionId: input.versionId,
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const [items, total] = await Promise.all([
+        getTranslationHistory({
+          keyId: input.keyId,
+          keyIds: projectKeyIds,
+          localeCode: input.localeCode,
+          versionId: input.versionId,
+          limit: input.limit,
+          offset: input.offset,
+        }),
+        getHistoryCount({
+          keyId: input.keyId,
+          keyIds: projectKeyIds,
+          localeCode: input.localeCode,
+          versionId: input.versionId,
+        }),
+      ]);
+      return { items, total };
     }),
 });
 
@@ -507,6 +517,31 @@ const userRouter = router({
       name: u.name ?? "",
     }));
   }),
+  /**
+   * Manually create a user record (admin only). Useful for pre-assigning a
+   * role before the person logs in via OAuth, or for fully local accounts.
+   * Generates a `manual:{nanoid}` openId so the unique constraint is happy.
+   */
+  create: adminProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(128),
+        email: z.string().trim().email().optional().or(z.literal("")),
+        role: z.enum(["admin", "editor", "rd", "qa"]).default("rd"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const openId = `manual:${nanoid(16)}`;
+      await upsertUser({
+        openId,
+        name: input.name,
+        email: input.email ? input.email : null,
+        loginMethod: "manual",
+        role: input.role,
+        lastSignedIn: new Date(),
+      });
+      return { success: true, openId };
+    }),
   updateRole: adminProcedure
     .input(
       z.object({

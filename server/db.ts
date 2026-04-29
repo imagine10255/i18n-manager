@@ -465,18 +465,25 @@ export async function getTranslationHistory(options?: {
 
 export async function getHistoryCount(options?: {
   keyId?: number;
+  keyIds?: number[];
   localeCode?: string;
   changedBy?: number;
+  versionId?: number;
 }) {
   const db = await getDb();
   if (!db) return 0;
 
   const conditions: any[] = [];
   if (options?.keyId) conditions.push(eq(translationHistory.keyId, options.keyId));
+  if (options?.keyIds && options.keyIds.length > 0) {
+    conditions.push(inArray(translationHistory.keyId, options.keyIds));
+  }
   if (options?.localeCode)
     conditions.push(eq(translationHistory.localeCode, options.localeCode));
   if (options?.changedBy)
     conditions.push(eq(translationHistory.changedBy, options.changedBy));
+  if (options?.versionId)
+    conditions.push(eq(translationHistory.versionId, options.versionId));
 
   const conditions_final = conditions.length > 0 ? and(...conditions) : undefined;
   let query = db.select({ count: sql<number>`COUNT(*)` }).from(translationHistory);

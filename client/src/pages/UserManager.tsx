@@ -2,7 +2,18 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -12,7 +23,8 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
-import { Shield, Users } from "lucide-react";
+import { Loader2, Plus, Shield, Users } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 const ROLES = [
@@ -47,6 +59,37 @@ export default function UserManager() {
     onError: (e: any) => toast.error(`更新失敗：${e.message}`),
   });
 
+  // ── Add user dialog ──
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState<{
+    name: string;
+    email: string;
+    role: "admin" | "editor" | "rd" | "qa";
+  }>({ name: "", email: "", role: "rd" });
+
+  const createUserMutation = trpc.user.create.useMutation({
+    onSuccess: () => {
+      toast.success("使用者已新增");
+      utils.user.list.invalidate();
+      utils.user.listBasic.invalidate();
+      setShowAdd(false);
+      setForm({ name: "", email: "", role: "rd" });
+    },
+    onError: (e: any) => toast.error(`新增失敗：${e.message}`),
+  });
+
+  const handleSubmitNewUser = () => {
+    if (!form.name.trim()) {
+      toast.error("請輸入名稱");
+      return;
+    }
+    createUserMutation.mutate({
+      name: form.name.trim(),
+      email: form.email.trim() || undefined,
+      role: form.role,
+    });
+  };
+
   if (!isAdmin) {
     return (
       <DashboardLayout>
@@ -63,9 +106,21 @@ export default function UserManager() {
   return (
     <DashboardLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">使用者管理</h1>
-          <p className="text-sm text-muted-foreground mt-1">管理團隊成員的系統角色與存取權限</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">使用者管理</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              管理團隊成員的系統角色與存取權限
+            </p>
+          </div>
+          <Button
+            onClick={() => setShowAdd(true)}
+            size="sm"
+            className="gap-2 shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            新增使用者
+          </Button>
         </div>
 
         {/* Role legend */}
@@ -168,6 +223,114 @@ export default function UserManager() {
             )}
           </CardContent>
         </Card>
+
+        {/* Add user dialog */}
+        <Dialog
+          open={showAdd}
+          onOpenChange={(open) => {
+            setShowAdd(open);
+            if (!open) setForm({ name: "", email: "", role: "rd" });
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>新增使用者</DialogTitle>
+              <DialogDescription>
+                建立一筆使用者紀錄並指派角色。系統會自動產生內部識別碼，
+                如果該成員之後透過 OAuth 登入會建立另一筆紀錄。
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div>
+                <Label htmlFor="user-name" className="text-xs">
+                  名稱 *
+                </Label>
+                <Input
+                  id="user-name"
+                  value={form.name}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  placeholder="例如：王小明"
+                  className="mt-1"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <Label htmlFor="user-email" className="text-xs">
+                  Email（選填）
+                </Label>
+                <Input
+                  id="user-email"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, email: e.target.value }))
+                  }
+                  placeholder="user@example.com"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">角色</Label>
+                <Select
+                  value={form.role}
+                  onValueChange={(v) =>
+                    setForm((f) => ({
+                      ...f,
+                      role: v as "admin" | "editor" | "rd" | "qa",
+                    }))
+                  }
+                >
+                  <SelectTrigger className="mt-1 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLES.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${ROLE_COLORS[r.value]}`}
+                          >
+                            {r.label}
+                          </span>
+                          <span className="text-muted-foreground text-xs">
+                            {r.desc}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowAdd(false)}
+                disabled={createUserMutation.isPending}
+              >
+                取消
+              </Button>
+              <Button
+                onClick={handleSubmitNewUser}
+                disabled={createUserMutation.isPending || !form.name.trim()}
+                className="gap-2"
+              >
+                {createUserMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    新增中…
+                  </>
+                ) : (
+                  "新增"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

@@ -67,7 +67,7 @@ export default function KeyHistoryModal({
     { keyId: keyId ?? 0, limit: 200 },
     { enabled: open && keyId !== null }
   );
-  const records = (query.data ?? []) as any[];
+  const records = ((query.data as any)?.items ?? []) as any[];
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>

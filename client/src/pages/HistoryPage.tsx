@@ -111,7 +111,7 @@ export default function HistoryPage() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="w-full space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div>
