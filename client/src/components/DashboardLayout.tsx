@@ -42,6 +42,10 @@ import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./ThemeToggle";
 
+// ThemeToggle is rendered in the sticky page header (and the mobile header
+// fallback) so users always have access to it. We previously also rendered it
+// in the sidebar footer — that was redundant and has been removed.
+
 type MenuItem = {
   icon: React.ElementType;
   label: string;
@@ -282,15 +286,7 @@ function DashboardLayoutContent({
           </SidebarContent>
 
           {/* Footer */}
-          <SidebarFooter className="p-3 border-t border-sidebar-border/50 gap-2">
-            {!isCollapsed && (
-              <div className="flex items-center justify-between px-1.5">
-                <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
-                  外觀
-                </span>
-                <ThemeToggle align="end" side="top" />
-              </div>
-            )}
+          <SidebarFooter className="p-3 border-t border-sidebar-border/50">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-sidebar-accent transition-colors w-full text-left focus:outline-none group">

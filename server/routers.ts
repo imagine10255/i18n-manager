@@ -203,7 +203,13 @@ const translationKeyRouter = router({
       }
 
       // 如果指定了版本，需要從 translationHistory 表重建翻譯快照
-      let versionTranslations: Record<number, Record<string, { value: string | null; isTranslated: boolean }>> = {};
+      type LocaleCell = {
+        value: string | null;
+        isTranslated: boolean;
+        updatedAt?: Date | null;
+        updatedBy?: number | null;
+      };
+      let versionTranslations: Record<number, Record<string, LocaleCell>> = {};
       if (input.versionId) {
         const db = await getDb();
         if (db) {
@@ -212,17 +218,23 @@ const translationKeyRouter = router({
             .select()
             .from(translationHistory)
             .where(eq(translationHistory.versionId, input.versionId));
-          
-          // 構建版本快照：每個 Key 的最新翻譯值
-          const latestByKeyAndLocale: Record<number, Record<string, any>> = {};
+
+          // 構建版本快照：每個 Key 的最新翻譯值（按 changedAt 取最新一筆）
+          const latestByKeyAndLocale: Record<number, Record<string, LocaleCell>> = {};
+          // sort by changedAt asc so later writes overwrite
+          historyRecords.sort(
+            (a: any, b: any) =>
+              new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime()
+          );
           for (const record of historyRecords) {
             if (!latestByKeyAndLocale[record.keyId]) {
               latestByKeyAndLocale[record.keyId] = {};
             }
-            // 使用最新的值（後来的記錄會覆蓋前面的）
             latestByKeyAndLocale[record.keyId][record.localeCode] = {
               value: record.newValue,
-              isTranslated: record.newValue !== null && record.newValue !== '',
+              isTranslated: record.newValue !== null && record.newValue !== "",
+              updatedAt: record.changedAt as any,
+              updatedBy: (record as any).changedBy ?? null,
             };
           }
           versionTranslations = latestByKeyAndLocale;
@@ -230,18 +242,23 @@ const translationKeyRouter = router({
       }
 
       const result = filteredKeys.map((key) => {
-        const localeValues: Record<string, { value: string | null; isTranslated: boolean }> = {};
+        const localeValues: Record<string, LocaleCell> = {};
         const keyTranslations = allTranslations.filter((t) => t.keyId === key.id);
-        
+
         if (input.versionId) {
           // 使用版本快照中的翻譯
           if (versionTranslations[key.id]) {
             Object.assign(localeValues, versionTranslations[key.id]);
           }
         } else {
-          // 未指定版本，顯示最新翻譯
+          // 未指定版本，顯示最新翻譯（含 updatedAt / updatedBy 以利顯示最後修改者）
           for (const t of keyTranslations) {
-            localeValues[t.localeCode] = { value: t.value, isTranslated: t.isTranslated };
+            localeValues[t.localeCode] = {
+              value: t.value,
+              isTranslated: t.isTranslated,
+              updatedAt: (t as any).updatedAt ?? null,
+              updatedBy: (t as any).updatedBy ?? null,
+            };
           }
         }
         return { ...key, translations: localeValues };
@@ -430,6 +447,18 @@ const statsRouter = router({
 // ─── User router ──────────────────────────────────────────────────────────────
 const userRouter = router({
   list: adminProcedure.query(() => getAllUsers()),
+  /**
+   * Lightweight directory of users (id + name only) — used to show "last
+   * modified by" in the translation editor. Available to any authenticated
+   * user since the editor needs it to attribute changes to a person.
+   */
+  listBasic: protectedProcedure.query(async () => {
+    const all = await getAllUsers();
+    return (all as any[]).map((u) => ({
+      id: u.id,
+      name: u.name ?? "",
+    }));
+  }),
   updateRole: adminProcedure
     .input(
       z.object({
