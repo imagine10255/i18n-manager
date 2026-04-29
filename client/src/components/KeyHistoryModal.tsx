@@ -9,7 +9,8 @@ import { trpc } from "@/lib/trpc";
 import { ArrowRight, ChevronDown, ChevronRight, Clock, History } from "lucide-react";
 import { LocaleFlag } from "./LocaleFlag";
 import { findPreset } from "@/lib/localePresets";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   groupHistoryRecords,
   type HistoryGroup,
@@ -85,6 +86,19 @@ export default function KeyHistoryModal({
       return next;
     });
 
+  // ── Virtualized list (handles long edit history without DOM bloat) ──
+  const listRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: groups.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 80,
+    overscan: 8,
+    measureElement:
+      typeof window !== "undefined"
+        ? (el) => el.getBoundingClientRect().height
+        : undefined,
+  });
+
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="!max-w-4xl w-[min(96vw,960px)] max-h-[88vh] overflow-hidden flex flex-col p-0 gap-0">
@@ -100,7 +114,7 @@ export default function KeyHistoryModal({
           )}
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto scrollbar-elegant">
+        <div ref={listRef} className="flex-1 overflow-y-auto scrollbar-elegant">
           {query.isLoading ? (
             <div className="p-6 space-y-3">
               {[1, 2, 3].map((i) => (
@@ -119,16 +133,38 @@ export default function KeyHistoryModal({
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-border/40">
-              {groups.map((g) => (
-                <ModalGroupRow
-                  key={g.key}
-                  group={g}
-                  expanded={expanded.has(g.key)}
-                  onToggle={() => toggle(g.key)}
-                  showKeyPath={false}
-                />
-              ))}
+            <div
+              style={{
+                height: `${virtualizer.getTotalSize()}px`,
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {virtualizer.getVirtualItems().map((vItem) => {
+                const g = groups[vItem.index];
+                return (
+                  <div
+                    key={g.key}
+                    ref={virtualizer.measureElement}
+                    data-index={vItem.index}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${vItem.start}px)`,
+                    }}
+                    className="border-b border-border/40"
+                  >
+                    <ModalGroupRow
+                      group={g}
+                      expanded={expanded.has(g.key)}
+                      onToggle={() => toggle(g.key)}
+                      showKeyPath={false}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
