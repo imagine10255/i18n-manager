@@ -1408,26 +1408,24 @@ export default function TranslationEditorOptimized() {
                   Key
                 </div>
                 {/* Scrolling: locale columns */}
-                <div className={`${LOCALES_COL} flex items-center bg-muted/95 backdrop-blur-sm`}>
-                  <div className="flex gap-2 px-3 py-2">
-                    {locales.map((locale) => (
-                      <div
-                        key={locale.code}
-                        className="flex-1 min-w-[120px] flex items-center gap-2"
-                        title={`${localeChineseName(locale)} (${locale.code})`}
-                      >
-                        <LocaleFlag code={locale.code} size="md" />
-                        <div className="flex flex-col leading-tight min-w-0">
-                          <span className="normal-case truncate text-[13px] font-medium text-foreground">
-                            {localeChineseName(locale)}
-                          </span>
-                          <span className="font-mono text-[10px] text-muted-foreground/80 truncate">
-                            {locale.code}
-                          </span>
-                        </div>
+                <div className={`${LOCALES_COL} flex gap-2 items-center px-3 py-2 bg-muted/95 backdrop-blur-sm`}>
+                  {locales.map((locale) => (
+                    <div
+                      key={locale.code}
+                      className="flex-1 min-w-[120px] flex items-center gap-2"
+                      title={`${localeChineseName(locale)} (${locale.code})`}
+                    >
+                      <LocaleFlag code={locale.code} size="md" />
+                      <div className="flex flex-col leading-tight min-w-0">
+                        <span className="normal-case truncate text-[13px] font-medium text-foreground">
+                          {localeChineseName(locale)}
+                        </span>
+                        <span className="font-mono text-[10px] text-muted-foreground/80 truncate">
+                          {locale.code}
+                        </span>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
                 {/* Sticky-right: Meta */}
                 <div

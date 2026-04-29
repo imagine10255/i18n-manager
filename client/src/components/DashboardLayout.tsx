@@ -176,7 +176,9 @@ function DashboardLayoutContent({
         <Sidebar collapsible="icon" className="border-r-0">
           {/* Header */}
           <SidebarHeader className="h-16 justify-center border-b border-sidebar-border/50">
-            <div className="flex items-center gap-3 px-2">
+            <div
+              className={`flex items-center gap-3 ${isCollapsed ? "justify-center px-0" : "px-2"}`}
+            >
               <button
                 onClick={toggleSidebar}
                 className="h-8 w-8 flex items-center justify-center hover:bg-sidebar-accent rounded-lg transition-colors focus:outline-none shrink-0"
@@ -250,12 +252,16 @@ function DashboardLayoutContent({
                 <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
                   外觀
                 </span>
-                <ThemeToggle align="end" side="top" />
+                <ThemeToggle align="end" side="top" surface="sidebar" />
               </div>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-sidebar-accent transition-colors w-full text-left focus:outline-none group">
+                <button
+                  className={`flex items-center gap-3 rounded-xl py-2 hover:bg-sidebar-accent transition-colors w-full text-left focus:outline-none group ${
+                    isCollapsed ? "justify-center px-0" : "px-2"
+                  }`}
+                >
                   <Avatar className="h-8 w-8 shrink-0 ring-1 ring-sidebar-border">
                     <AvatarFallback className="text-xs font-semibold bg-sidebar-primary/20 text-sidebar-primary">
                       {user?.name?.charAt(0).toUpperCase() ?? "U"}

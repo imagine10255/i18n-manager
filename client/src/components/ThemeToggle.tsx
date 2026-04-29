@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun, Monitor } from "lucide-react";
-import { Button } from "./ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,17 +32,22 @@ function applyTheme(theme: Theme) {
  *
  * Pairs with the inline script in `index.html` that applies the saved theme
  * before React mounts (so there's no flash of incorrect theme).
+ *
+ * `surface="sidebar"` switches the trigger button to use sidebar tokens so the
+ * hover state is dark-on-dark rather than the regular ghost variant which
+ * shows as a near-white pill in light mode and obscures the icon.
  */
 export function ThemeToggle({
   align = "end",
   side = "bottom",
+  surface = "default",
 }: {
   align?: "start" | "center" | "end";
   side?: "top" | "right" | "bottom" | "left";
+  surface?: "default" | "sidebar";
 }) {
   const [theme, setThemeState] = useState<Theme>(() => readStoredTheme());
 
-  // Apply theme + persist
   useEffect(() => {
     applyTheme(theme);
     if (theme === "system") {
@@ -53,7 +57,6 @@ export function ThemeToggle({
     }
   }, [theme]);
 
-  // React to OS preference changes when in "system" mode
   useEffect(() => {
     if (theme !== "system") return;
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
@@ -71,28 +74,38 @@ export function ThemeToggle({
     { value: "system", label: "跟隨系統", icon: Monitor },
   ];
 
+  // Hover/text colors are surface-aware so the trigger reads correctly in both
+  // the light page chrome AND the always-dark sidebar.
+  const triggerCls =
+    surface === "sidebar"
+      ? "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent focus-visible:bg-sidebar-accent"
+      : "text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:bg-muted";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 relative"
+        <button
+          type="button"
           title="切換外觀"
           aria-label="切換外觀模式"
+          className={`h-8 w-8 relative inline-flex items-center justify-center rounded-md transition-colors focus:outline-none ${triggerCls}`}
         >
           {/* Cross-fade sun/moon */}
           <Sun
             className={`h-4 w-4 absolute transition-all ${
-              effectivelyDark ? "opacity-0 rotate-90 scale-50" : "opacity-100 rotate-0 scale-100"
+              effectivelyDark
+                ? "opacity-0 rotate-90 scale-50"
+                : "opacity-100 rotate-0 scale-100"
             }`}
           />
           <Moon
             className={`h-4 w-4 absolute transition-all ${
-              effectivelyDark ? "opacity-100 rotate-0 scale-100" : "opacity-0 -rotate-90 scale-50"
+              effectivelyDark
+                ? "opacity-100 rotate-0 scale-100"
+                : "opacity-0 -rotate-90 scale-50"
             }`}
           />
-        </Button>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} side={side} className="w-40">
         {items.map(({ value, label, icon: Icon }) => (

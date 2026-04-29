@@ -68,7 +68,7 @@ export default function VersionSelectModal({
   isLoading = false,
   onVersionCreated,
 }: VersionSelectModalProps) {
-  const [mode, setMode] = useState<"select" | "new">("new");
+  const [mode, setMode] = useState<"select" | "new">("select");
   const [selectedVersionId, setSelectedVersionId] = useState<string>("");
   const [newVersionNumber, setNewVersionNumber] = useState("");
   const utils = trpc.useUtils();
@@ -78,24 +78,36 @@ export default function VersionSelectModal({
     [existingVersions, isOpen]
   );
 
-  // Pre-fill the suggested version number every time the modal opens (or
-  // existing versions change). The user can still edit it if they want.
+  // Pre-fill on open: prefer "select" mode (with the newest version pre-picked)
+  // when there are existing versions; otherwise drop into "new" mode with the
+  // auto-suggested version number. Reset everything on close.
   useEffect(() => {
-    if (isOpen && mode === "new" && !newVersionNumber) {
-      setNewVersionNumber(suggested);
-    }
-    // Default to "new" mode when modal opens (auto-suggested number is the headline feature)
     if (isOpen) {
-      // Only switch to "select" if there's existing version AND user hasn't already picked
-      // — but the auto-suggest UX is the default
+      // Auto-route mode based on whether existing versions are available —
+      // only on first open while still at our reset defaults.
+      if (existingVersions.length === 0 && mode === "select") {
+        setMode("new");
+      }
+
+      if (mode === "new" && !newVersionNumber) {
+        setNewVersionNumber(suggested);
+      }
+      if (
+        mode === "select" &&
+        !selectedVersionId &&
+        existingVersions.length > 0
+      ) {
+        setSelectedVersionId(existingVersions[0].id.toString());
+      }
     } else {
-      // Reset on close so next open recalculates fresh
       setNewVersionNumber("");
       setSelectedVersionId("");
-      setMode("new");
+      // Reset to the preferred default — will auto-flip to "new" on next open
+      // if there are no existing versions.
+      setMode("select");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, suggested]);
+  }, [isOpen, mode, suggested, existingVersions]);
 
   const createVersionMutation = trpc.translationVersion.create.useMutation({
     onSuccess: () => {
@@ -166,7 +178,7 @@ export default function VersionSelectModal({
               <Label>版本號</Label>
               {existingVersions.length > 0 ? (
                 <Select value={selectedVersionId} onValueChange={setSelectedVersionId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="選擇版本..." />
                   </SelectTrigger>
                   <SelectContent>
