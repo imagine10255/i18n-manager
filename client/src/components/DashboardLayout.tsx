@@ -30,17 +30,18 @@ import {
   ChevronDown,
   Clock,
   Globe,
+  Key,
   LayoutDashboard,
   LogOut,
   PanelLeft,
-  Settings,
   Users,
 } from "lucide-react";
-import { CSSProperties } from "react";
+import { CSSProperties, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./ThemeToggle";
+import ChangePasswordDialog from "./ChangePasswordDialog";
 
 // ThemeToggle is rendered in the sticky page header (and the mobile header
 // fallback) so users always have access to it. We previously also rendered it
@@ -158,6 +159,7 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const isMobile = useIsMobile();
   const userRole = (user as { role?: string })?.role ?? "rd";
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
 
   const visibleGroups = menuGroups.map((group) => ({
     ...group,
@@ -289,6 +291,14 @@ function DashboardLayoutContent({
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  onClick={() => setShowPasswordDialog(true)}
+                  className="cursor-pointer"
+                >
+                  <Key className="mr-2 h-4 w-4" />
+                  <span>變更密碼</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
                   onClick={logout}
                   className="cursor-pointer text-destructive focus:text-destructive"
                 >
@@ -316,6 +326,13 @@ function DashboardLayoutContent({
 
         <main className="flex-1 p-6 bg-background min-h-screen">{children}</main>
       </SidebarInset>
+
+      {/* Self-service password change — accessible from the user dropdown */}
+      <ChangePasswordDialog
+        open={showPasswordDialog}
+        hasExistingPassword={!!(user as any)?.passwordHash}
+        onClose={() => setShowPasswordDialog(false)}
+      />
     </>
   );
 }

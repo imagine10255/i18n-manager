@@ -74,6 +74,7 @@ import CreateKeyModal from "@/components/CreateKeyModal";
 import KeyHistoryModal from "@/components/KeyHistoryModal";
 import ProjectHistoryModal from "@/components/ProjectHistoryModal";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 interface TreeNode {
   id: string;
@@ -196,6 +197,15 @@ const LOCALE_FLAGS: Record<string, string> = {
 };
 
 export default function TranslationEditorOptimized() {
+  // ── Permission gating ──
+  // Only admin / editor may write (translations, keys, sort, import). rd / qa
+  // are read-only. The server enforces this via editorProcedure too — this
+  // just disables the UI affordances so the user doesn't get silent failures.
+  const { user: authUser } = useAuth();
+  const role = (authUser as { role?: string } | null)?.role ?? "rd";
+  const canEdit = role === "admin" || role === "editor";
+  const isAdmin = role === "admin";
+
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedProject, setSelectedProject] = useState<number | null>(null);
   const [openProjectIds, setOpenProjectIdsState] = useState<number[]>(() => {
@@ -1314,17 +1324,19 @@ export default function TranslationEditorOptimized() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Project settings (admin) */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 gap-1.5"
-              onClick={() => setShowProjectSettings(true)}
-              title="專案設定（含可用語系）"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">設定</span>
-            </Button>
+            {/* Project settings — admin only */}
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5"
+                onClick={() => setShowProjectSettings(true)}
+                title="專案設定（含可用語系）"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">設定</span>
+              </Button>
+            )}
 
             {/* Stat pills + sync indicator — pushed right */}
             <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
@@ -1377,10 +1389,11 @@ export default function TranslationEditorOptimized() {
             {/* "Sort by name" — persists alphabetical order to the DB */}
             <Button
               onClick={() => setCreateKeyContext({ mode: "root" })}
-              disabled={!selectedProject}
+              disabled={!selectedProject || !canEdit}
               variant="outline"
               size="sm"
               className="h-9 gap-1.5"
+              title={!canEdit ? "需要 editor 以上權限" : undefined}
             >
               <Plus className="h-3.5 w-3.5" />
               新增 Key
@@ -1393,10 +1406,15 @@ export default function TranslationEditorOptimized() {
               onClick={handleResortByName}
               disabled={
                 !selectedProject ||
+                !canEdit ||
                 allKeys.length === 0 ||
                 resortMutation.isPending
               }
-              title="依 keyPath 字母順序重排所有 Key 並寫回資料庫"
+              title={
+                !canEdit
+                  ? "需要 editor 以上權限"
+                  : "依 keyPath 字母順序重排所有 Key 並寫回資料庫"
+              }
             >
               {resortMutation.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1408,12 +1426,16 @@ export default function TranslationEditorOptimized() {
 
             {/* Import — single button, multi-select files; locale inferred from filename */}
             <Button
-              disabled={!selectedProject || locales.length === 0}
+              disabled={!selectedProject || !canEdit || locales.length === 0}
               variant="outline"
               size="sm"
               className="h-9 gap-1.5"
               onClick={triggerImportFilePicker}
-              title="匯入 JSON（檔名 = 語系代碼，可一次選多檔）"
+              title={
+                !canEdit
+                  ? "需要 editor 以上權限"
+                  : "匯入 JSON（檔名 = 語系代碼，可一次選多檔）"
+              }
             >
               <Download className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">匯入</span>
@@ -1496,12 +1518,12 @@ export default function TranslationEditorOptimized() {
 
             <Button
               onClick={handleSave}
-              disabled={!hasChanges || batchUpdateMutation.isPending}
+              disabled={!hasChanges || !canEdit || batchUpdateMutation.isPending}
               size="sm"
               className={`h-9 gap-1.5 min-w-[110px] transition-all ${
                 hasChanges ? "shadow-[var(--shadow-glow)]" : ""
               }`}
-              title="保存 (⌘S)"
+              title={!canEdit ? "需要 editor 以上權限" : "保存 (⌘S)"}
             >
               {batchUpdateMutation.isPending ? (
                 <>
@@ -1625,6 +1647,7 @@ export default function TranslationEditorOptimized() {
                           isExpanded={expandedPaths.has(node.fullPath)}
                           onToggle={() => toggleExpand(node)}
                           leafCount={folderLeafCount.get(node.fullPath) ?? 0}
+                          canEdit={canEdit}
                           onInsertSibling={() => {
                             const parentSegments = node.fullPath
                               .split(".")
@@ -1659,6 +1682,7 @@ export default function TranslationEditorOptimized() {
                           isPending={isPending}
                           isChangedInVersion={isChangedInVersion}
                           versionMode={selectedVersion !== null}
+                          canEdit={canEdit}
                           onChange={handleCellChange}
                           onOpenModal={handleOpenEditModal}
                           onRequestDelete={(id, path) =>
@@ -2035,6 +2059,7 @@ function FolderRow({
   isExpanded,
   onToggle,
   leafCount,
+  canEdit,
   onInsertSibling,
   onInsertChild,
   onRequestDelete,
@@ -2043,6 +2068,7 @@ function FolderRow({
   isExpanded: boolean;
   onToggle: () => void;
   leafCount: number;
+  canEdit: boolean;
   onInsertSibling: () => void;
   onInsertChild: () => void;
   onRequestDelete: () => void;
@@ -2099,54 +2125,56 @@ function FolderRow({
       >
         群組
       </div>
-      {/* Sticky-right: kebab menu */}
+      {/* Sticky-right: kebab menu (hidden for read-only roles) */}
       <div
         className={`shrink-0 w-8 ${STICKY_KEBAB} ${cellBg} flex items-center justify-end pr-1`}
         onClick={(e) => e.stopPropagation()}
       >
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-background/60 transition-all opacity-0 group-hover/folder:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-              aria-label="更多動作"
-              title="更多動作"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical className="h-4 w-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem
-              onClick={() => {
-                onInsertChild();
-              }}
-              className="cursor-pointer"
-            >
-              <CornerDownRight className="h-4 w-4 mr-2" />
-              新增子層 Key
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                onInsertSibling();
-              }}
-              className="cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              新增同層 Key
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                onRequestDelete();
-              }}
-              className="cursor-pointer text-destructive focus:text-destructive"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              刪除整個群組
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {canEdit && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-background/60 transition-all opacity-0 group-hover/folder:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                aria-label="更多動作"
+                title="更多動作"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={() => {
+                  onInsertChild();
+                }}
+                className="cursor-pointer"
+              >
+                <CornerDownRight className="h-4 w-4 mr-2" />
+                新增子層 Key
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  onInsertSibling();
+                }}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                新增同層 Key
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  onRequestDelete();
+                }}
+                className="cursor-pointer text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                刪除整個群組
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </button>
   );
@@ -2159,6 +2187,7 @@ function LeafRow({
   isPending,
   isChangedInVersion,
   versionMode,
+  canEdit,
   onChange,
   onOpenModal,
   onRequestDelete,
@@ -2172,6 +2201,7 @@ function LeafRow({
   isPending: (keyId: number, code: string) => boolean;
   isChangedInVersion: (keyId: number, code: string) => boolean;
   versionMode: boolean;
+  canEdit: boolean;
   onChange: (keyId: number, code: string, value: string) => void;
   onOpenModal: (keyId: number, keyPath: string) => void;
   onRequestDelete: (keyId: number, keyPath: string) => void;
@@ -2254,12 +2284,14 @@ function LeafRow({
                 type="text"
                 placeholder={localeChineseName(locale)}
                 value={val}
+                readOnly={!canEdit}
                 onChange={(e) =>
                   onChange(node.keyId!, locale.code, e.target.value)
                 }
                 onClick={(e) => e.stopPropagation()}
                 className={`peer w-full h-9 pl-2.5 pr-7 text-sm rounded-md bg-input border transition-all
                   focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/25
+                  ${!canEdit ? "cursor-default opacity-90" : ""}
                   ${pending
                     ? "border-amber-500/60 bg-amber-500/5"
                     : highlighted
@@ -2267,7 +2299,11 @@ function LeafRow({
                       : filled
                         ? "border-border"
                         : "border-border/70 text-muted-foreground"}`}
-                title={`${locale.name} (${locale.code})${highlighted ? " · 此版本有異動" : dimmed ? " · 此版本未動" : ""}`}
+                title={
+                  !canEdit
+                    ? `唯讀 — 需要 editor 以上權限`
+                    : `${locale.name} (${locale.code})${highlighted ? " · 此版本有異動" : dimmed ? " · 此版本未動" : ""}`
+                }
               />
               {/* Status dot */}
               <span
@@ -2330,7 +2366,7 @@ function LeafRow({
               onClick={() => onOpenModal(node.keyId!, node.fullPath)}
               className="cursor-pointer"
             >
-              詳細編輯
+              {canEdit ? "詳細編輯" : "詳細檢視"}
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => onViewHistory(node.keyId!)}
@@ -2339,25 +2375,31 @@ function LeafRow({
               <History className="h-4 w-4 mr-2" />
               查看編輯歷程
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                const parentSegments = node.fullPath.split(".").slice(0, -1);
-                onInsertSibling(parentSegments.join("."));
-              }}
-              className="cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              新增同層 Key
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => onRequestDelete(node.keyId!, node.fullPath)}
-              className="cursor-pointer text-destructive focus:text-destructive"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              刪除 Key
-            </DropdownMenuItem>
+            {canEdit && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => {
+                    const parentSegments = node.fullPath
+                      .split(".")
+                      .slice(0, -1);
+                    onInsertSibling(parentSegments.join("."));
+                  }}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  新增同層 Key
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onRequestDelete(node.keyId!, node.fullPath)}
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  刪除 Key
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

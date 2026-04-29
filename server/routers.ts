@@ -714,6 +714,33 @@ const userRouter = router({
       await deleteUser(input.id);
       return { success: true };
     }),
+  /**
+   * Self-service password change. Available to any authenticated user.
+   * Requires the user's current password (or, for users who have never set
+   * one, an empty currentPassword is accepted on the first set).
+   */
+  changeOwnPassword: protectedProcedure
+    .input(
+      z.object({
+        currentPassword: z.string().max(128),
+        newPassword: z.string().min(6).max(128),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const me = ctx.user as any;
+      if (me.passwordHash) {
+        const ok = await verifyPassword(input.currentPassword, me.passwordHash);
+        if (!ok) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "目前的密碼錯誤",
+          });
+        }
+      }
+      const newHash = await hashPassword(input.newPassword);
+      await updateUser(me.id, { passwordHash: newHash });
+      return { success: true };
+    }),
 });
 
 // ─── Main app router ──────────────────────────────────────────────────────────
@@ -757,7 +784,7 @@ export const appRouter = router({
               message: "Email 或密碼錯誤",
             });
           }
-          await updateUser(user.id, { /* touches updatedAt; lastSignedIn refreshed below via upsert */ });
+          // Refresh lastSignedIn (upsertUser handles "row exists" path).
           await upsertUser({
             openId: user.openId,
             lastSignedIn: new Date(),
