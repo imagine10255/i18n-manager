@@ -106,7 +106,7 @@ export default function ProjectHistoryModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!max-w-3xl w-[min(94vw,820px)] max-h-[85vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="!max-w-5xl w-[min(96vw,1120px)] max-h-[88vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 py-4 border-b border-border/60 bg-muted/30">
           <DialogTitle className="flex items-center gap-2 text-base">
             <History className="h-4 w-4 text-primary" />
@@ -283,32 +283,43 @@ function ProjectGroupRow({
           {group.records.map((r: any, i) => (
             <div
               key={r.id ?? i}
-              className="flex items-start gap-3 pl-12 pr-5 py-2 text-xs"
+              className="grid items-start gap-3 pl-12 pr-5 py-2 text-xs"
+              style={{
+                gridTemplateColumns:
+                  "minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 3fr)",
+              }}
             >
-              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 break-all">
+              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 break-all min-w-0">
                 {r.keyPath ?? `Key #${r.keyId}`}
               </code>
-              {r.localeCode !== "*" && (
-                <span className="flex items-center gap-1 shrink-0 text-muted-foreground">
-                  <LocaleFlag code={r.localeCode} size="xs" />
-                  <span className="font-mono">
-                    {findPreset(r.localeCode)?.name ?? r.localeCode}
-                  </span>
-                </span>
-              )}
-              <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+              <div className="text-muted-foreground min-w-0 flex items-center gap-1">
+                {r.localeCode === "*" ? (
+                  <span className="italic">— 整個 Key —</span>
+                ) : (
+                  <>
+                    <LocaleFlag code={r.localeCode} size="xs" />
+                    <span className="font-mono truncate">
+                      {findPreset(r.localeCode)?.name ?? r.localeCode}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="flex items-start gap-2 flex-wrap min-w-0">
                 {r.action === "update" && r.oldValue !== null && r.oldValue !== "" && (
                   <>
                     <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through break-all">
                       {r.oldValue || "(空)"}
                     </span>
-                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0 mt-1" />
                   </>
                 )}
                 {r.action !== "delete" && r.newValue !== null && (
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 break-all">
                     {r.newValue || "(空)"}
                   </span>
+                )}
+                {r.action === "delete" && (
+                  <span className="text-muted-foreground italic">已刪除</span>
                 )}
               </div>
             </div>

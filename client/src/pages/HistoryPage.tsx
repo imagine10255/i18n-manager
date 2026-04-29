@@ -511,29 +511,43 @@ function HistoryGroupRow({
           {group.records.map((r: any, i: number) => (
             <div
               key={r.id ?? i}
-              className="flex items-start gap-3 pl-14 pr-5 py-2.5 text-xs"
+              className="grid items-start gap-3 pl-14 pr-5 py-2.5 text-xs"
+              style={{
+                gridTemplateColumns:
+                  "minmax(0, 2fr) minmax(0, 1fr) minmax(0, 3fr)",
+              }}
             >
-              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 break-all">
+              {/* Col 1 — keyPath */}
+              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 break-all min-w-0">
                 {r.keyPath ?? `Key #${r.keyId}`}
               </code>
-              {r.localeCode !== "*" && (
-                <span className="text-muted-foreground shrink-0">
-                  {FLAG_MAP[r.localeCode] ?? "🌐"} {r.localeCode}
-                </span>
-              )}
-              <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+              {/* Col 2 — locale */}
+              <div className="text-muted-foreground min-w-0 truncate">
+                {r.localeCode === "*" ? (
+                  <span className="italic">— 整個 Key —</span>
+                ) : (
+                  <span>
+                    {FLAG_MAP[r.localeCode] ?? "🌐"} {r.localeCode}
+                  </span>
+                )}
+              </div>
+              {/* Col 3 — diff */}
+              <div className="flex items-start gap-2 flex-wrap min-w-0">
                 {r.action === "update" && r.oldValue !== null && r.oldValue !== "" && (
                   <>
                     <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through break-all">
                       {r.oldValue || "(空)"}
                     </span>
-                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0 mt-1" />
                   </>
                 )}
                 {r.action !== "delete" && r.newValue !== null && (
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 break-all">
                     {r.newValue || "(空)"}
                   </span>
+                )}
+                {r.action === "delete" && (
+                  <span className="text-muted-foreground italic">已刪除</span>
                 )}
               </div>
             </div>
