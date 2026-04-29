@@ -531,9 +531,14 @@ const translationRouter = router({
     .query(async ({ input }) => {
       // When filtering by project, first translate that into a list of key ids
       // (no projectId column on translation_history) and pass it down.
+      // IMPORTANT: include soft-deleted keys — otherwise the very "delete"
+      // history record we want to show would be filtered out.
       let projectKeyIds: number[] | undefined;
       if (input.projectId !== undefined) {
-        const projectKeys = await getTranslationKeys({ projectId: input.projectId });
+        const projectKeys = await getTranslationKeys({
+          projectId: input.projectId,
+          includeDeleted: true,
+        });
         projectKeyIds = projectKeys.map((k: any) => k.id);
         if (projectKeyIds.length === 0) return { items: [], total: 0 };
       }

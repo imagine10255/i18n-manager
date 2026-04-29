@@ -426,7 +426,7 @@ function HistoryGroupRow({
         </span>
         <div className="flex-1 min-w-0 space-y-2">
           <div className="flex items-center flex-wrap gap-2">
-            <code className="text-xs font-mono bg-secondary px-2 py-0.5 rounded text-foreground/80 truncate max-w-full">
+            <code className="text-xs font-mono bg-secondary px-2 py-0.5 rounded text-foreground/80 break-all">
               {item.keyPath ?? `Key #${item.keyId}`}
             </code>
             {item.localeCode !== "*" && (
@@ -439,14 +439,14 @@ function HistoryGroupRow({
             <div className="flex items-start gap-2 text-xs flex-wrap">
               {item.action === "update" && item.oldValue !== null && (
                 <>
-                  <span className="px-2 py-1 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through max-w-xs truncate">
+                  <span className="px-2 py-1 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through break-all">
                     {item.oldValue || "(空)"}
                   </span>
                   <ArrowRight className="h-3.5 w-3.5 text-muted-foreground mt-1 shrink-0" />
                 </>
               )}
               {item.newValue !== null && (
-                <span className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 max-w-xs truncate">
+                <span className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 break-all">
                   {item.newValue || "(空)"}
                 </span>
               )}
@@ -513,7 +513,7 @@ function HistoryGroupRow({
               key={r.id ?? i}
               className="flex items-start gap-3 pl-14 pr-5 py-2.5 text-xs"
             >
-              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 truncate max-w-[40%]">
+              <code className="font-mono bg-card px-1.5 py-0.5 rounded text-foreground/80 break-all">
                 {r.keyPath ?? `Key #${r.keyId}`}
               </code>
               {r.localeCode !== "*" && (
@@ -524,14 +524,14 @@ function HistoryGroupRow({
               <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
                 {r.action === "update" && r.oldValue !== null && r.oldValue !== "" && (
                   <>
-                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through truncate max-w-[180px]">
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-300 line-through break-all">
                       {r.oldValue || "(空)"}
                     </span>
                     <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
                   </>
                 )}
                 {r.action !== "delete" && r.newValue !== null && (
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 truncate max-w-[180px]">
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 break-all">
                     {r.newValue || "(空)"}
                   </span>
                 )}
