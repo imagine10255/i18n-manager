@@ -188,78 +188,50 @@ const translationKeyRouter = router({
       const keyIds = keys.map((k) => k.id);
       const allTranslations = await getTranslationsByKeyIds(keyIds);
 
-      // 如果指定了版本，只返回該版本中有異動的 Key
-      let filteredKeys = keys;
+      // 收集該版本中有異動的 (keyId, localeCode) — 用於亮顯異動 cell
+      // 注意：版本檢視預設「顯示全部 Key 的最新值」，只是把該版本內被動到的 cell 標亮。
+      let changedInVersion = new Set<string>();
       if (input.versionId) {
         const db = await getDb();
         if (db) {
-          const changedKeyIds = await db
-            .selectDistinct({ keyId: translationHistory.keyId })
+          const changes = await db
+            .select({
+              keyId: translationHistory.keyId,
+              localeCode: translationHistory.localeCode,
+            })
             .from(translationHistory)
             .where(eq(translationHistory.versionId, input.versionId));
-          const changedKeyIdSet = new Set(changedKeyIds.map((row: any) => row.keyId));
-          filteredKeys = keys.filter((k) => changedKeyIdSet.has(k.id));
+          for (const row of changes as any[]) {
+            changedInVersion.add(`${row.keyId}:${row.localeCode}`);
+          }
         }
       }
+      // 一律回傳全部 keys（不再依 versionId 過濾）— 由 client 用 changedInVersion 標記異動
+      const filteredKeys = keys;
 
-      // 如果指定了版本，需要從 translationHistory 表重建翻譯快照
       type LocaleCell = {
         value: string | null;
         isTranslated: boolean;
         updatedAt?: Date | null;
         updatedBy?: number | null;
+        /** True iff this (key, locale) was modified in the selected version. */
+        changedInVersion?: boolean;
       };
-      let versionTranslations: Record<number, Record<string, LocaleCell>> = {};
-      if (input.versionId) {
-        const db = await getDb();
-        if (db) {
-          // 查詢該版本中每個 Key 的最新翻譯記錄
-          const historyRecords = await db
-            .select()
-            .from(translationHistory)
-            .where(eq(translationHistory.versionId, input.versionId));
-
-          // 構建版本快照：每個 Key 的最新翻譯值（按 changedAt 取最新一筆）
-          const latestByKeyAndLocale: Record<number, Record<string, LocaleCell>> = {};
-          // sort by changedAt asc so later writes overwrite
-          historyRecords.sort(
-            (a: any, b: any) =>
-              new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime()
-          );
-          for (const record of historyRecords) {
-            if (!latestByKeyAndLocale[record.keyId]) {
-              latestByKeyAndLocale[record.keyId] = {};
-            }
-            latestByKeyAndLocale[record.keyId][record.localeCode] = {
-              value: record.newValue,
-              isTranslated: record.newValue !== null && record.newValue !== "",
-              updatedAt: record.changedAt as any,
-              updatedBy: (record as any).changedBy ?? null,
-            };
-          }
-          versionTranslations = latestByKeyAndLocale;
-        }
-      }
 
       const result = filteredKeys.map((key) => {
         const localeValues: Record<string, LocaleCell> = {};
         const keyTranslations = allTranslations.filter((t) => t.keyId === key.id);
-
-        if (input.versionId) {
-          // 使用版本快照中的翻譯
-          if (versionTranslations[key.id]) {
-            Object.assign(localeValues, versionTranslations[key.id]);
-          }
-        } else {
-          // 未指定版本，顯示最新翻譯（含 updatedAt / updatedBy 以利顯示最後修改者）
-          for (const t of keyTranslations) {
-            localeValues[t.localeCode] = {
-              value: t.value,
-              isTranslated: t.isTranslated,
-              updatedAt: (t as any).updatedAt ?? null,
-              updatedBy: (t as any).updatedBy ?? null,
-            };
-          }
+        // Always show the latest stored value (so users can compare full state)
+        for (const t of keyTranslations) {
+          localeValues[t.localeCode] = {
+            value: t.value,
+            isTranslated: t.isTranslated,
+            updatedAt: (t as any).updatedAt ?? null,
+            updatedBy: (t as any).updatedBy ?? null,
+            changedInVersion: input.versionId
+              ? changedInVersion.has(`${key.id}:${t.localeCode}`)
+              : undefined,
+          };
         }
         return { ...key, translations: localeValues };
       });

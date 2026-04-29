@@ -20,8 +20,10 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
+import { X } from "lucide-react";
 
 const FLAG_MAP: Record<string, string> = {
   "zh-TW": "🇹🇼", "zh-CN": "🇨🇳", "en": "🇺🇸", "ja": "🇯🇵",
@@ -37,6 +39,16 @@ const ACTION_STYLES = {
 const PAGE_SIZE = 50;
 
 export default function HistoryPage() {
+  const [, setLocation] = useLocation();
+  // Pull ?keyId=N out of the URL so the editor can deep-link here for a single key.
+  const initialKeyId = (() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("keyId");
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) ? n : null;
+  })();
+  const [filterKeyId, setFilterKeyId] = useState<number | null>(initialKeyId);
+  const [filterKeyPath, setFilterKeyPath] = useState<string>("");
   const [filterLocale, setFilterLocale] = useState("");
   const [filterAction, setFilterAction] = useState("");
   const [offset, setOffset] = useState(0);
@@ -46,7 +58,24 @@ export default function HistoryPage() {
 
   const { data: locales } = trpc.locale.listActive.useQuery();
 
+  // If linked-in with a keyId, fetch that key's path so we can show "filtering by …"
+  const keyDetailQuery = trpc.translationKey.list.useQuery(
+    { projectId: 1 },
+    { enabled: filterKeyId !== null }
+  );
+  useEffect(() => {
+    if (filterKeyId === null) {
+      setFilterKeyPath("");
+      return;
+    }
+    const found = (keyDetailQuery.data ?? []).find(
+      (k: any) => k.id === filterKeyId
+    );
+    setFilterKeyPath(found?.keyPath ?? `#${filterKeyId}`);
+  }, [filterKeyId, keyDetailQuery.data]);
+
   const { data: historyData, isLoading } = trpc.translation.getHistory.useQuery({
+    keyId: filterKeyId ?? undefined,
     localeCode: filterLocale || undefined,
     limit: PAGE_SIZE,
     offset,
@@ -82,7 +111,7 @@ export default function HistoryPage() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -101,6 +130,37 @@ export default function HistoryPage() {
             匯出 JSON
           </Button>
         </div>
+
+        {/* Linked-in key filter banner */}
+        {filterKeyId !== null && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+            <div className="flex items-center gap-2 text-sm min-w-0">
+              <Filter className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="text-muted-foreground">僅顯示 Key</span>
+              <code className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded truncate">
+                {filterKeyPath || `#${filterKeyId}`}
+              </code>
+              <span className="text-muted-foreground">的歷程</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setFilterKeyId(null);
+                setFilterKeyPath("");
+                setOffset(0);
+                // also clear the URL param so refresh doesn't re-apply it
+                if (typeof window !== "undefined") {
+                  setLocation("/history");
+                }
+              }}
+              className="h-7 gap-1 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+              清除
+            </Button>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3">

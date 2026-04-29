@@ -136,6 +136,32 @@ export const translationHistory = mysqlTable("translation_history", {
 export type TranslationHistory = typeof translationHistory.$inferSelect;
 export type InsertTranslationHistory = typeof translationHistory.$inferInsert;
 
+// Translation snapshots table (整份版本快照：每次儲存到某版本時，把該專案目前所有 key×locale 的 value 整份寫入這裡)
+export const translationSnapshots = mysqlTable("translation_snapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  versionId: int("versionId").notNull(),
+  keyId: int("keyId").notNull(),
+  localeCode: varchar("localeCode", { length: 16 }).notNull(),
+  value: text("value"),
+  isTranslated: boolean("isTranslated").default(false).notNull(),
+  /** Whether this (keyId, localeCode) was actually changed in this version's save */
+  wasChanged: boolean("wasChanged").default(false).notNull(),
+  /** Original updatedBy / updatedAt at the moment of snapshot, copied from translations */
+  updatedBy: int("updatedBy"),
+  updatedAt: timestamp("updatedAt"),
+  snapshotAt: timestamp("snapshotAt").defaultNow().notNull(),
+}, (table) => [
+  index("idx_snapshot_version").on(table.versionId),
+  index("idx_snapshot_version_key_locale").on(
+    table.versionId,
+    table.keyId,
+    table.localeCode
+  ),
+]);
+
+export type TranslationSnapshot = typeof translationSnapshots.$inferSelect;
+export type InsertTranslationSnapshot = typeof translationSnapshots.$inferInsert;
+
 // Translation exports table (記錄每次匯出的版本快照)
 export const translationExports = mysqlTable("translation_exports", {
   id: int("id").autoincrement().primaryKey(),

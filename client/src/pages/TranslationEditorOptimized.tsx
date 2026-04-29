@@ -23,6 +23,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { LocaleBadge } from "@/components/LocaleBadge";
+import { findPreset } from "@/lib/localePresets";
+
+/** Resolve a locale's Chinese display name with fallbacks. */
+function localeChineseName(locale: { code: string; name?: string; nativeName?: string }) {
+  const preset = findPreset(locale.code);
+  if (preset) return preset.name;
+  return locale.name || locale.nativeName || locale.code;
+}
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,6 +59,8 @@ import {
   Download,
   Upload,
   FileJson,
+  CornerDownRight,
+  History,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -57,6 +68,7 @@ import TranslationEditModal from "@/components/TranslationEditModal";
 import VersionSelectModal from "@/components/VersionSelectModal";
 import CreateProjectModal from "@/components/CreateProjectModal";
 import CreateKeyModal from "@/components/CreateKeyModal";
+import KeyHistoryModal from "@/components/KeyHistoryModal";
 
 interface TreeNode {
   id: string;
@@ -70,6 +82,8 @@ interface TreeNode {
   level: number;
   lastModified?: Date;
   lastModifiedBy?: number; // user id, resolved to name at render
+  /** When this key (or, for folders, their newest descendant) was created. Used to put new keys at top. */
+  createdAt?: Date;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -146,8 +160,17 @@ function downloadFile(filename: string, content: string, mime = "application/jso
 // ────────────────────────────────────────────────────────────
 const ROW_HEIGHT = 56;
 const KEY_COL = "min-w-[260px] flex-[0_0_280px]";
-const META_COL = "hidden md:flex flex-[0_0_160px] min-w-[120px]";
+const META_COL = "hidden md:flex flex-[0_0_auto] w-[120px]";
 const LOCALES_COL = "flex-1 min-w-0";
+
+// ── Sticky column anchors (Key on the left, Meta + Kebab on the right) ──
+const STICKY_LEFT = "sticky left-0 z-[2]";
+const STICKY_META = "sticky right-8 z-[2]"; // 32px kebab to its right
+const STICKY_KEBAB = "sticky right-0 z-[2]";
+const STICKY_LEFT_SHADOW =
+  "shadow-[6px_0_10px_-8px_rgba(0,0,0,0.25)] dark:shadow-[6px_0_10px_-8px_rgba(0,0,0,0.6)]";
+const STICKY_RIGHT_SHADOW =
+  "shadow-[-6px_0_10px_-8px_rgba(0,0,0,0.25)] dark:shadow-[-6px_0_10px_-8px_rgba(0,0,0,0.6)]";
 
 const LOCALE_FLAGS: Record<string, string> = {
   "zh-TW": "🇹🇼",
@@ -197,6 +220,16 @@ export default function TranslationEditorOptimized() {
   );
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [onlyVersionKeys, setOnlyVersionKeys] = useState(false);
+  const [sortMode, setSortMode] = useState<"createdAt" | "alpha">(() => {
+    if (typeof window === "undefined") return "createdAt";
+    const v = window.localStorage.getItem("i18n-editor-sort-mode");
+    return v === "alpha" ? "alpha" : "createdAt";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("i18n-editor-sort-mode", sortMode);
+    }
+  }, [sortMode]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
   const [editingKeyPath, setEditingKeyPath] = useState("");
@@ -205,8 +238,12 @@ export default function TranslationEditorOptimized() {
   >(new Map());
   const [showVersionModal, setShowVersionModal] = useState(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
-  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
+  const [createKeyContext, setCreateKeyContext] = useState<{
+    parentPath?: string;
+    mode: "root" | "sibling" | "child";
+  } | null>(null);
   const [deletingKey, setDeletingKey] = useState<{ id: number; path: string } | null>(null);
+  const [historyKey, setHistoryKey] = useState<{ id: number; path: string } | null>(null);
   const [importFile, setImportFile] = useState<{
     file: File;
     parsed: Record<string, string>;
@@ -320,11 +357,21 @@ export default function TranslationEditorOptimized() {
   const rootKeys = useMemo(() => {
     let pool = allKeys;
 
-    // 1) 「僅該版本 Key」 — 只保留該版本內出現過的 keyId
+    // 1) 「僅該版本 Key」 — 只保留該版本內有任何 cell 被異動過的 keyId
     if (onlyVersionKeys && selectedVersion !== null) {
-      const versionKeyIds = new Set<number>(
-        (translations as any[]).map((t) => t.id)
-      );
+      const versionKeyIds = new Set<number>();
+      for (const t of translations as any[]) {
+        const trs = t.translations as
+          | Record<string, { changedInVersion?: boolean }>
+          | undefined;
+        if (!trs) continue;
+        for (const code of Object.keys(trs)) {
+          if (trs[code]?.changedInVersion) {
+            versionKeyIds.add(t.id);
+            break;
+          }
+        }
+      }
       pool = pool.filter((k) => versionKeyIds.has(k.id));
     }
 
@@ -400,6 +447,11 @@ export default function TranslationEditorOptimized() {
               level: i,
               lastModified: latestAt ?? trans?.updatedAt,
               lastModifiedBy: latestBy,
+              createdAt: isLeaf
+                ? (key as any).createdAt
+                  ? new Date((key as any).createdAt)
+                  : undefined
+                : undefined,
             };
             map.set(currentPath, node);
 
@@ -424,11 +476,39 @@ export default function TranslationEditorOptimized() {
           roots.push(node);
         }
       }
-      return roots.sort((a, b) => a.keyPath.localeCompare(b.keyPath));
+
+      // Post-order: bubble each folder's `createdAt` up to be the newest of its
+      // descendants, then sort children according to the selected mode.
+      const computeAndSort = (nodes: TreeNode[]): Date | undefined => {
+        let maxAt: Date | undefined;
+        for (const n of nodes) {
+          if (n.isFolder) {
+            const childMax = computeAndSort(n.children);
+            n.createdAt = childMax;
+          }
+          if (n.createdAt && (!maxAt || n.createdAt > maxAt)) {
+            maxAt = n.createdAt;
+          }
+        }
+        if (sortMode === "alpha") {
+          nodes.sort((a, b) => a.keyPath.localeCompare(b.keyPath));
+        } else {
+          nodes.sort((a, b) => {
+            const at = a.createdAt?.getTime() ?? 0;
+            const bt = b.createdAt?.getTime() ?? 0;
+            // newest first; tie-break alphabetically so the order is stable
+            if (bt !== at) return bt - at;
+            return a.keyPath.localeCompare(b.keyPath);
+          });
+        }
+        return maxAt;
+      };
+      computeAndSort(roots);
+      return roots;
     };
 
     return buildTree(rootKeys);
-  }, [rootKeys, translations]);
+  }, [rootKeys, translations, sortMode]);
 
   // count leaf descendants for folder badges
   const folderLeafCount = useMemo(() => {
@@ -520,6 +600,19 @@ export default function TranslationEditorOptimized() {
 
   const isPending = (keyId: number, localeCode: string) =>
     pendingUpdates.has(`${keyId}:${localeCode}`);
+
+  /** Whether a cell was actually edited in the currently filtered version.
+   * When no version is selected, this returns true so cells render at full
+   * brightness (no dimming applied). */
+  const isChangedInVersion = useCallback(
+    (keyId: number, localeCode: string) => {
+      if (selectedVersion === null) return true;
+      const t = (translations as any[]).find((x) => x.id === keyId);
+      const cell = t?.translations?.[localeCode];
+      return !!cell?.changedInVersion;
+    },
+    [translations, selectedVersion]
+  );
 
   const getTranslationValues = (keyId: number) => {
     const result: Record<string, string> = {};
@@ -617,7 +710,6 @@ export default function TranslationEditorOptimized() {
       toast.success("新 Key 建立成功");
       utils.translationKey.listByProject.invalidate();
       utils.translationKey.listWithTranslations.invalidate();
-      setShowCreateKeyModal(false);
     },
     onError: (error) => {
       toast.error(`建立失敗: ${error.message}`);
@@ -775,7 +867,8 @@ export default function TranslationEditorOptimized() {
   // instead of squeezing inputs and clipping the meta column.
   // Layout: pl(16) + KEY(280) + gap(12) + locales*(120 + 8 gap, less last) + 12 + META(160) + 12 + KEBAB(32) + pr(16)
   const tableMinWidth = useMemo(() => {
-    const base = 16 + 280 + 12 + 12 + 160 + 12 + 32 + 16; // 540
+    // pl(16) + KEY(280) + gap(12) + LOCALES gap(12) + META(120) + gap(12) + KEBAB(32) + pr(16)
+    const base = 16 + 280 + 12 + 12 + 120 + 12 + 32 + 16; // 500
     const localesWidth =
       locales.length === 0
         ? 0
@@ -788,9 +881,9 @@ export default function TranslationEditorOptimized() {
   // ────────────────────────────────────────────────────────
   return (
     <DashboardLayout>
-      <div className="flex flex-col h-[calc(100vh-7rem)] gap-4 max-w-[1600px] mx-auto w-full">
+      <div className="flex flex-col h-[calc(100vh-3rem)] gap-2 max-w-[1600px] mx-auto w-full">
         {/* ───────────── Project tab strip ───────────── */}
-        <div className="flex items-end gap-1 -mb-px overflow-x-auto scrollbar-elegant">
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-elegant -mt-1">
           {openTabsList.map((p) => (
             <ProjectTab
               key={p.id}
@@ -812,7 +905,7 @@ export default function TranslationEditorOptimized() {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors mb-0.5 ml-0.5"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
                 title="開啟專案"
                 aria-label="開啟專案"
               >
@@ -931,18 +1024,38 @@ export default function TranslationEditorOptimized() {
               </>
             )}
 
-            {/* Stat pills — pushed right */}
-            <div className="ml-auto flex items-center gap-2">
+            {/* Stat pills + sync indicator — pushed right */}
+            <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
               <StatPill
                 icon={<KeyRound className="h-3 w-3" />}
-                label="Keys"
-                value={totalLeafKeys}
+                label={
+                  searchTerm || (onlyVersionKeys && selectedVersion !== null)
+                    ? "顯示"
+                    : "Keys"
+                }
+                value={
+                  searchTerm || (onlyVersionKeys && selectedVersion !== null)
+                    ? `${flatList.length} / ${totalLeafKeys}`
+                    : totalLeafKeys
+                }
               />
               <StatPill
                 icon={<Languages className="h-3 w-3" />}
                 label="語系"
                 value={totalLocales}
               />
+              {/* Sync / pending indicator */}
+              {hasChanges ? (
+                <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-medium">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  {pendingUpdates.size} 項待保存
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  已同步
+                </span>
+              )}
             </div>
           </div>
           )}
@@ -959,8 +1072,36 @@ export default function TranslationEditorOptimized() {
               />
             </div>
 
+            {/* Sort mode toggle — alphabetical or creation-time order */}
+            <div className="inline-flex h-9 rounded-md border border-border bg-muted/40 p-0.5 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => setSortMode("createdAt")}
+                className={`px-2.5 rounded-sm transition-colors ${
+                  sortMode === "createdAt"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                title="新建立的 Key 排在最上面"
+              >
+                建立時間
+              </button>
+              <button
+                type="button"
+                onClick={() => setSortMode("alpha")}
+                className={`px-2.5 rounded-sm transition-colors ${
+                  sortMode === "alpha"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                title="依 keyPath 字母順序"
+              >
+                字母順序
+              </button>
+            </div>
+
             <Button
-              onClick={() => setShowCreateKeyModal(true)}
+              onClick={() => setCreateKeyContext({ mode: "root" })}
               disabled={!selectedProject}
               variant="outline"
               size="sm"
@@ -995,12 +1136,10 @@ export default function TranslationEditorOptimized() {
                     onClick={() => handleImportTriggerFor(l.code)}
                     className="cursor-pointer"
                   >
-                    <span className="text-base mr-2 leading-none">
-                      {LOCALE_FLAGS[l.code] ?? "🌐"}
-                    </span>
-                    <span className="font-mono text-xs">{l.code}</span>
-                    <span className="text-muted-foreground ml-2 truncate">
-                      · {l.nativeName}
+                    <LocaleBadge code={l.code} size="sm" className="mr-2" />
+                    <span className="font-medium">{localeChineseName(l)}</span>
+                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                      {l.code}
                     </span>
                   </DropdownMenuItem>
                 ))}
@@ -1037,12 +1176,10 @@ export default function TranslationEditorOptimized() {
                     onClick={() => handleExportLocale(l.code)}
                     className="cursor-pointer"
                   >
-                    <span className="text-base mr-2 leading-none">
-                      {LOCALE_FLAGS[l.code] ?? "🌐"}
-                    </span>
-                    <span className="font-mono text-xs">{l.code}</span>
-                    <span className="text-muted-foreground ml-2 truncate">
-                      .json
+                    <LocaleBadge code={l.code} size="sm" className="mr-2" />
+                    <span className="font-medium">{localeChineseName(l)}</span>
+                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                      {l.code}.json
                     </span>
                   </DropdownMenuItem>
                 ))}
@@ -1142,34 +1279,42 @@ export default function TranslationEditorOptimized() {
             {/* Single scroll container — header is sticky vertically, scrolls horizontally with rows */}
             <div ref={parentRef} className="flex-1 overflow-auto scrollbar-elegant">
             <div style={{ minWidth: `${tableMinWidth}px` }}>
-            {/* Header */}
-            <div className="sticky top-0 z-10 bg-muted/40 border-b border-border/60 backdrop-blur-sm">
-              <div
-                className="flex items-center gap-3 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-              >
-                <div className={KEY_COL}>Key</div>
-                <div className={LOCALES_COL}>
-                  <div className="flex gap-2">
+            {/* Header — left & right cells are sticky to keep Key/Meta visible while scrolling */}
+            <div className="sticky top-0 z-10 border-b border-border/60">
+              <div className="flex items-stretch text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {/* Sticky-left: Key */}
+                <div
+                  className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} flex items-center pl-4 pr-3 py-2.5 bg-muted/95 backdrop-blur-sm`}
+                >
+                  Key
+                </div>
+                {/* Scrolling: locale columns */}
+                <div className={`${LOCALES_COL} flex items-center bg-muted/95 backdrop-blur-sm`}>
+                  <div className="flex gap-2 px-3 py-2.5">
                     {locales.map((locale) => (
                       <div
                         key={locale.code}
                         className="flex-1 min-w-[120px] flex items-center gap-1.5"
                       >
-                        <span className="text-sm leading-none">
-                          {LOCALE_FLAGS[locale.code] ?? "🌐"}
-                        </span>
-                        <span className="font-mono text-[11px] tracking-tight normal-case">
-                          {locale.code}
-                        </span>
-                        <span className="text-muted-foreground/70 normal-case truncate">
-                          · {locale.nativeName}
+                        <LocaleBadge code={locale.code} size="sm" />
+                        <span className="normal-case truncate text-foreground/90">
+                          {localeChineseName(locale)}
                         </span>
                       </div>
                     ))}
                   </div>
                 </div>
-                <div className={`${META_COL} justify-end`}>最後修改</div>
-                <div className="shrink-0 w-8" aria-hidden />
+                {/* Sticky-right: Meta */}
+                <div
+                  className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} items-center justify-end pl-3 pr-2 py-2.5 bg-muted/95 backdrop-blur-sm`}
+                >
+                  最後修改
+                </div>
+                {/* Sticky-right: kebab placeholder */}
+                <div
+                  className={`shrink-0 w-8 ${STICKY_KEBAB} bg-muted/95 backdrop-blur-sm`}
+                  aria-hidden
+                />
               </div>
             </div>
 
@@ -1202,6 +1347,22 @@ export default function TranslationEditorOptimized() {
                           isExpanded={expandedPaths.has(node.fullPath)}
                           onToggle={() => toggleExpand(node)}
                           leafCount={folderLeafCount.get(node.fullPath) ?? 0}
+                          onInsertSibling={() => {
+                            const parentSegments = node.fullPath
+                              .split(".")
+                              .slice(0, -1);
+                            const parent = parentSegments.join(".");
+                            setCreateKeyContext({
+                              parentPath: parent || undefined,
+                              mode: parent ? "sibling" : "root",
+                            });
+                          }}
+                          onInsertChild={() =>
+                            setCreateKeyContext({
+                              parentPath: node.fullPath,
+                              mode: "child",
+                            })
+                          }
                         />
                       ) : (
                         <LeafRow
@@ -1209,10 +1370,21 @@ export default function TranslationEditorOptimized() {
                           locales={locales}
                           getValue={getTranslationValue}
                           isPending={isPending}
+                          isChangedInVersion={isChangedInVersion}
+                          versionMode={selectedVersion !== null}
                           onChange={handleCellChange}
                           onOpenModal={handleOpenEditModal}
                           onRequestDelete={(id, path) =>
                             setDeletingKey({ id, path })
+                          }
+                          onInsertSibling={(parentPath) =>
+                            setCreateKeyContext({
+                              parentPath: parentPath || undefined,
+                              mode: parentPath ? "sibling" : "root",
+                            })
+                          }
+                          onViewHistory={(keyId) =>
+                            setHistoryKey({ id: keyId, path: node.fullPath })
                           }
                           userIdToName={userIdToName}
                         />
@@ -1226,37 +1398,7 @@ export default function TranslationEditorOptimized() {
           </div>
         )}
 
-        {/* ───────────── Bottom stats bar ───────────── */}
-        {selectedProject && flatList.length > 0 && (
-          <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
-            <div className="flex items-center gap-3">
-              <span className="tabular-nums">
-                {searchTerm
-                  ? `搜尋結果 · ${flatList.length} / ${allKeys.length}`
-                  : `共 ${flatList.length} 個項目`}
-              </span>
-              <span className="hidden sm:inline text-muted-foreground/60">·</span>
-              <span className="hidden sm:inline">
-                ⌘<kbd className="font-mono">S</kbd> 保存 · ⌘
-                <kbd className="font-mono">A</kbd> 展開 · ⌘
-                <kbd className="font-mono">Z</kbd> 收起
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {hasChanges ? (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-medium">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  {pendingUpdates.size} 項待保存
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  已同步
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        {/* Bottom stats bar removed — its info is integrated into the toolbar / Save button so the table can use the full vertical space. */}
 
         {/* Modals */}
         <TranslationEditModal
@@ -1285,10 +1427,24 @@ export default function TranslationEditorOptimized() {
           isOpen={showCreateProjectModal}
           onClose={() => setShowCreateProjectModal(false)}
         />
+        {/* Single-key edit history (opened from leaf row kebab) */}
+        <KeyHistoryModal
+          open={historyKey !== null}
+          keyId={historyKey?.id ?? null}
+          keyPath={historyKey?.path}
+          userIdToName={userIdToName}
+          onClose={() => setHistoryKey(null)}
+        />
+
         <CreateKeyModal
-          isOpen={showCreateKeyModal}
-          onConfirm={handleCreateKey}
-          onCancel={() => setShowCreateKeyModal(false)}
+          isOpen={createKeyContext !== null}
+          parentPath={createKeyContext?.parentPath}
+          insertMode={createKeyContext?.mode ?? "root"}
+          onConfirm={async (keyPath, description) => {
+            await handleCreateKey(keyPath, description);
+            setCreateKeyContext(null);
+          }}
+          onCancel={() => setCreateKeyContext(null)}
           isLoading={createKeyMutation.isPending}
         />
 
@@ -1363,7 +1519,9 @@ export default function TranslationEditorOptimized() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span>目標語系：</span>
                     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-mono text-xs">
-                      {LOCALE_FLAGS[importFile?.localeCode ?? ""] ?? "🌐"}
+                      {importFile?.localeCode && (
+                        <LocaleBadge code={importFile.localeCode} size="xs" />
+                      )}
                       {importFile?.localeCode}
                     </span>
                   </div>
@@ -1435,21 +1593,14 @@ function ProjectTab({
           onClick();
         }
       }}
-      className={`group/tab relative flex items-center gap-2 h-9 pl-3 pr-1.5 rounded-t-lg border border-b-0 cursor-pointer text-sm transition-colors max-w-[200px] ${
+      className={`group/tab relative flex items-center gap-2 h-8 pl-2.5 pr-1.5 rounded-lg cursor-pointer text-sm font-medium transition-all max-w-[220px] shrink-0 ${
         active
-          ? "bg-card text-foreground border-border"
-          : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted hover:text-foreground"
+          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
+          : "text-muted-foreground hover:text-foreground hover:bg-muted/70"
       }`}
     >
-      {active && (
-        <span
-          aria-hidden
-          className="absolute top-0 left-2 right-2 h-0.5 rounded-full"
-          style={{ background: "var(--gradient-primary)" }}
-        />
-      )}
       <FolderTree
-        className={`h-3.5 w-3.5 shrink-0 ${active ? "text-primary" : "text-muted-foreground/70"}`}
+        className={`h-3.5 w-3.5 shrink-0 ${active ? "text-primary" : "text-muted-foreground/60"}`}
       />
       <span className="truncate">{name}</span>
       <button
@@ -1458,7 +1609,11 @@ function ProjectTab({
           e.stopPropagation();
           onClose();
         }}
-        className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-background/60 transition opacity-0 group-hover/tab:opacity-100 focus:opacity-100"
+        className={`h-5 w-5 inline-flex items-center justify-center rounded transition opacity-0 group-hover/tab:opacity-100 focus:opacity-100 ${
+          active
+            ? "text-primary/70 hover:text-primary hover:bg-primary/10"
+            : "text-muted-foreground/60 hover:text-foreground hover:bg-background"
+        }`}
         aria-label={`關閉 ${name}`}
         title="關閉專案頁籤"
       >
@@ -1516,31 +1671,42 @@ function FolderRow({
   isExpanded,
   onToggle,
   leafCount,
+  onInsertSibling,
+  onInsertChild,
 }: {
   node: TreeNode;
   isExpanded: boolean;
   onToggle: () => void;
   leafCount: number;
+  onInsertSibling: () => void;
+  onInsertChild: () => void;
 }) {
+  // Folder uses a slightly stronger surface than the regular card so it stands out
+  const cellBg = "bg-muted group-hover/folder:bg-secondary transition-colors";
   return (
     <button
       type="button"
       onClick={onToggle}
-      className="relative w-full h-full flex items-center gap-3 px-4 text-left border-b border-border/60 bg-muted/70 hover:bg-muted transition-colors group/folder"
+      className="group/folder w-full h-full flex items-stretch border-b border-border/60 text-left"
     >
-      {/* Left primary accent bar to make folders pop */}
-      <span
-        aria-hidden
-        className={`absolute left-0 top-0 bottom-0 w-[3px] ${
-          isExpanded ? "bg-primary" : "bg-primary/40"
-        }`}
-      />
-      {/* KEY column — indent is INSIDE this fixed-width column so locale columns always line up */}
-      <div className={`${KEY_COL} flex items-center gap-2 min-w-0`}>
+      {/* Sticky-left: Key column (with accent bar baked in) */}
+      <div
+        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative flex items-center gap-2 pl-4 pr-3`}
+      >
+        <span
+          aria-hidden
+          className={`absolute left-0 top-0 bottom-0 w-[3px] ${
+            isExpanded ? "bg-primary" : "bg-primary/40"
+          }`}
+        />
         {node.level > 0 && (
-          <span aria-hidden className="shrink-0" style={{ width: `${node.level * 16}px` }} />
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{ width: `${node.level * 16}px` }}
+          />
         )}
-        <span className="shrink-0 w-5 flex items-center justify-center text-foreground/70 group-hover/folder:text-foreground transition-colors">
+        <span className="shrink-0 w-5 flex items-center justify-center text-foreground/70 group-hover/folder:text-foreground">
           {isExpanded ? (
             <ChevronDown className="h-4 w-4" />
           ) : (
@@ -1554,16 +1720,58 @@ function FolderRow({
           {node.keyPath}
         </span>
       </div>
-      <div className={`${LOCALES_COL} flex items-center`}>
+      {/* Scrolling: leaf count */}
+      <div className={`${LOCALES_COL} flex items-center px-3 ${cellBg}`}>
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-card border border-border text-[11px] text-muted-foreground tabular-nums shadow-sm">
           <KeyRound className="h-2.5 w-2.5" />
           {leafCount}
         </span>
       </div>
-      <div className={`${META_COL} text-[11px] uppercase tracking-wider text-muted-foreground/80 font-semibold justify-end`}>
+      {/* Sticky-right: meta label */}
+      <div
+        className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} ${cellBg} items-center justify-end pl-3 pr-2 text-[11px] uppercase tracking-wider text-muted-foreground/80 font-semibold`}
+      >
         群組
       </div>
-      <div className="shrink-0 w-8" aria-hidden />
+      {/* Sticky-right: kebab menu */}
+      <div
+        className={`shrink-0 w-8 ${STICKY_KEBAB} ${cellBg} flex items-center justify-end pr-1`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-background/60 transition-all opacity-0 group-hover/folder:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              aria-label="更多動作"
+              title="更多動作"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem
+              onClick={() => {
+                onInsertChild();
+              }}
+              className="cursor-pointer"
+            >
+              <CornerDownRight className="h-4 w-4 mr-2" />
+              新增子層 Key
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                onInsertSibling();
+              }}
+              className="cursor-pointer"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              新增同層 Key
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </button>
   );
 }
@@ -1573,18 +1781,26 @@ function LeafRow({
   locales,
   getValue,
   isPending,
+  isChangedInVersion,
+  versionMode,
   onChange,
   onOpenModal,
   onRequestDelete,
+  onInsertSibling,
+  onViewHistory,
   userIdToName,
 }: {
   node: TreeNode;
   locales: any[];
   getValue: (keyId: number, code: string) => string;
   isPending: (keyId: number, code: string) => boolean;
+  isChangedInVersion: (keyId: number, code: string) => boolean;
+  versionMode: boolean;
   onChange: (keyId: number, code: string, value: string) => void;
   onOpenModal: (keyId: number, keyPath: string) => void;
   onRequestDelete: (keyId: number, keyPath: string) => void;
+  onInsertSibling: (parentPath: string) => void;
+  onViewHistory: (keyId: number) => void;
   userIdToName: Map<number, string>;
 }) {
   if (!node.keyId) return null;
@@ -1605,25 +1821,27 @@ function LeafRow({
       ? userIdToName.get(node.lastModifiedBy) || `#${node.lastModifiedBy}`
       : null;
 
+  // Leaf cells: card by default, muted on hover
+  const cellBg = "bg-card group-hover/row:bg-muted/70 transition-colors";
   return (
-    <div
-      className="group/row w-full h-full flex items-center gap-3 px-4 border-b border-border/60 hover:bg-muted/30 transition-colors relative"
-    >
-      {/* Active accent bar on hover */}
-      <span
-        aria-hidden
-        className="absolute left-0 top-2 bottom-2 w-0.5 rounded-r-full bg-primary opacity-0 group-hover/row:opacity-60 transition-opacity"
-      />
-
-      {/* Key column — indent inside this fixed-width column so locale columns always line up */}
+    <div className="group/row w-full h-full flex items-stretch border-b border-border/60 relative">
+      {/* Sticky-left: Key column (accent bar baked in) */}
       <button
         type="button"
         onClick={() => onOpenModal(node.keyId!, node.fullPath)}
-        className={`${KEY_COL} text-left min-w-0 flex items-center gap-2 group/key`}
+        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative pl-4 pr-3 text-left min-w-0 flex items-center gap-2 group/key`}
         title="點擊以詳細編輯"
       >
+        <span
+          aria-hidden
+          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-r-full bg-primary opacity-0 group-hover/row:opacity-60 transition-opacity"
+        />
         {node.level > 0 && (
-          <span aria-hidden className="shrink-0" style={{ width: `${node.level * 16}px` }} />
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{ width: `${node.level * 16}px` }}
+          />
         )}
         <span aria-hidden className="shrink-0 w-5" />
         <div className="flex flex-col justify-center min-w-0">
@@ -1638,21 +1856,27 @@ function LeafRow({
         </div>
       </button>
 
-      {/* Locale inputs */}
-      <div className={`${LOCALES_COL} flex gap-2`}>
+      {/* Scrolling: locale inputs */}
+      <div className={`${LOCALES_COL} flex gap-2 items-center px-3 ${cellBg}`}>
         {locales.map((locale) => {
           const val = getValue(node.keyId!, locale.code);
           const pending = isPending(node.keyId!, locale.code);
           const filled = !!val.trim();
+          // In version-filter mode, cells that were NOT touched by this version
+          // appear dimmed; only cells changed in this version stay bright.
+          const dimmed =
+            versionMode && !isChangedInVersion(node.keyId!, locale.code);
+          const highlighted =
+            versionMode && isChangedInVersion(node.keyId!, locale.code);
           return (
             <div
               key={locale.code}
-              className="flex-1 min-w-[120px] relative"
+              className={`flex-1 min-w-[120px] relative transition-opacity ${dimmed ? "opacity-45" : ""}`}
               onClick={(e) => e.stopPropagation()}
             >
               <input
                 type="text"
-                placeholder={`${locale.code}…`}
+                placeholder={localeChineseName(locale)}
                 value={val}
                 onChange={(e) =>
                   onChange(node.keyId!, locale.code, e.target.value)
@@ -1662,10 +1886,12 @@ function LeafRow({
                   focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/25
                   ${pending
                     ? "border-amber-500/60 bg-amber-500/5"
-                    : filled
-                      ? "border-border"
-                      : "border-border/70 text-muted-foreground"}`}
-                title={`${locale.name} (${locale.code})`}
+                    : highlighted
+                      ? "border-primary/60 ring-2 ring-primary/15"
+                      : filled
+                        ? "border-border"
+                        : "border-border/70 text-muted-foreground"}`}
+                title={`${locale.name} (${locale.code})${highlighted ? " · 此版本有異動" : dimmed ? " · 此版本未動" : ""}`}
               />
               {/* Status dot */}
               <span
@@ -1683,9 +1909,9 @@ function LeafRow({
         })}
       </div>
 
-      {/* Meta — last edited by + when */}
+      {/* Sticky-right: Meta — last edited by + when */}
       <div
-        className={`${META_COL} flex-col items-end justify-center text-right gap-0.5`}
+        className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} ${cellBg} flex-col items-end justify-center text-right gap-0.5 pl-3 pr-2`}
         title={
           editorName && lastModifiedFull
             ? `${editorName} · ${lastModifiedFull}`
@@ -1706,8 +1932,11 @@ function LeafRow({
         </span>
       </div>
 
-      {/* Row actions — kebab menu (always reserved space, opacity reveal on hover) */}
-      <div className="shrink-0 w-8 flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+      {/* Sticky-right: kebab menu (always reserved space, opacity reveal on hover) */}
+      <div
+        className={`shrink-0 w-8 ${STICKY_KEBAB} ${cellBg} flex items-center justify-end`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -1720,12 +1949,30 @@ function LeafRow({
               <MoreVertical className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem
               onClick={() => onOpenModal(node.keyId!, node.fullPath)}
               className="cursor-pointer"
             >
               詳細編輯
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onViewHistory(node.keyId!)}
+              className="cursor-pointer"
+            >
+              <History className="h-4 w-4 mr-2" />
+              查看編輯歷程
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                const parentSegments = node.fullPath.split(".").slice(0, -1);
+                onInsertSibling(parentSegments.join("."));
+              }}
+              className="cursor-pointer"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              新增同層 Key
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

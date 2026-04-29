@@ -286,7 +286,15 @@ function DashboardLayoutContent({
           </SidebarContent>
 
           {/* Footer */}
-          <SidebarFooter className="p-3 border-t border-sidebar-border/50">
+          <SidebarFooter className="p-3 border-t border-sidebar-border/50 gap-2">
+            {!isCollapsed && (
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
+                  外觀
+                </span>
+                <ThemeToggle align="end" side="top" />
+              </div>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-sidebar-accent transition-colors w-full text-left focus:outline-none group">
@@ -337,27 +345,17 @@ function DashboardLayoutContent({
       </div>
 
       <SidebarInset>
-        {/* Mobile header */}
+        {/* Mobile header — keeps the sidebar toggle accessible on small screens */}
         {isMobile && (
           <div className="flex border-b border-border/60 h-14 items-center justify-between surface-glass px-4 sticky top-0 z-40">
             <div className="flex items-center gap-3">
               <SidebarTrigger className="h-8 w-8 rounded-lg" />
               <span className="font-medium text-sm">{activeItem?.label ?? "i18n Manager"}</span>
             </div>
-            <ThemeToggle align="end" />
           </div>
         )}
-
-        {/* Page header */}
-        {!isMobile && activeItem && (
-          <div className="flex items-center justify-between px-6 py-3 border-b border-border/60 surface-glass sticky top-0 z-30">
-            <div className="flex items-center gap-2.5">
-              <activeItem.icon className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-foreground">{activeItem.label}</span>
-            </div>
-            <ThemeToggle align="end" />
-          </div>
-        )}
+        {/* Desktop has no page header — saves vertical space; the active item is already
+            highlighted in the sidebar nav. Theme toggle lives in the sidebar footer. */}
 
         <main className="flex-1 p-6 bg-background min-h-screen">{children}</main>
       </SidebarInset>

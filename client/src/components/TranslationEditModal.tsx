@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { LocaleBadge } from "./LocaleBadge";
+import { findPreset } from "@/lib/localePresets";
 
 interface Locale {
   id: number;
@@ -174,14 +176,12 @@ export default function TranslationEditModal({
                 >
                   <div className="flex items-center justify-between mb-2">
                     <Label className="flex items-center gap-2 cursor-pointer">
-                      <span className="text-base leading-none">
-                        {LOCALE_FLAGS[locale.code] ?? "🌐"}
+                      <LocaleBadge code={locale.code} size="md" />
+                      <span className="text-sm font-medium truncate">
+                        {findPreset(locale.code)?.name || locale.name || locale.nativeName}
                       </span>
-                      <span className="font-mono text-xs font-semibold">
+                      <span className="font-mono text-[10px] text-muted-foreground">
                         {locale.code}
-                      </span>
-                      <span className="text-xs text-muted-foreground truncate">
-                        {locale.nativeName ?? locale.name}
                       </span>
                     </Label>
                     <span

@@ -7,6 +7,7 @@ import {
   translationKeys,
   translations,
   translationHistory,
+  translationSnapshots,
   projects,
   translationVersions,
   translationExports,
@@ -443,6 +444,85 @@ export async function getExportData(versionId: number, localeCode: string) {
     .limit(1);
 
   return result.length > 0 ? result[0] : null;
+}
+
+// ─── Translation snapshot queries ──────────────────────────────────────────
+/**
+ * Replace the entire snapshot for a given version with a fresh, full copy of
+ * all (key, locale) pairs in the project. This is called from `batchUpdate`
+ * after the changes have been applied to `translations`, so the snapshot
+ * always represents the FULL state of the project at the moment of save.
+ *
+ * Caller passes `changedKeysSet` (a Set of `${keyId}:${localeCode}`) so we can
+ * mark which rows were actually changed in this save (used to highlight diffs
+ * in the UI and to power the "僅該版本 Key" filter).
+ */
+export async function replaceVersionSnapshot(input: {
+  versionId: number;
+  projectId: number;
+  changedSet: Set<string>; // entries like `${keyId}:${localeCode}`
+}) {
+  const db = await getDb();
+  if (!db) return;
+
+  // 1) Pull every non-deleted key in the project
+  const keys = await db
+    .select({ id: translationKeys.id })
+    .from(translationKeys)
+    .where(
+      and(
+        eq(translationKeys.projectId, input.projectId),
+        eq(translationKeys.isDeleted, false)
+      )
+    );
+  const keyIds = keys.map((k: any) => k.id as number);
+  if (keyIds.length === 0) {
+    // Nothing to snapshot — clear any previous rows for this version
+    await db
+      .delete(translationSnapshots)
+      .where(eq(translationSnapshots.versionId, input.versionId));
+    return;
+  }
+
+  // 2) Pull current translations for those keys
+  const allTranslations = await db
+    .select()
+    .from(translations)
+    .where(inArray(translations.keyId, keyIds));
+
+  // 3) Replace the entire snapshot for this versionId
+  await db
+    .delete(translationSnapshots)
+    .where(eq(translationSnapshots.versionId, input.versionId));
+
+  if (allTranslations.length === 0) return;
+
+  const rows = allTranslations.map((t: any) => ({
+    versionId: input.versionId,
+    keyId: t.keyId as number,
+    localeCode: t.localeCode as string,
+    value: t.value as string | null,
+    isTranslated: !!t.isTranslated,
+    wasChanged: input.changedSet.has(`${t.keyId}:${t.localeCode}`),
+    updatedBy: (t.updatedBy as number | null) ?? null,
+    updatedAt: (t.updatedAt as Date | null) ?? null,
+  }));
+
+  // Bulk insert in chunks (avoid hitting MySQL packet limits for huge projects)
+  const CHUNK = 1000;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    await db.insert(translationSnapshots).values(rows.slice(i, i + CHUNK));
+  }
+}
+
+/** Read all snapshot rows for a given version. */
+export async function getVersionSnapshot(versionId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(translationSnapshots)
+    .where(eq(translationSnapshots.versionId, versionId));
 }
 
 // ─── User queries ────────────────────────────────────────────────────────────
