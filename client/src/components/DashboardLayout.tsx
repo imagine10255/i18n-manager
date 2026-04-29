@@ -250,12 +250,23 @@ function DashboardLayoutContent({
           {/* Footer */}
           <SidebarFooter className="p-3 border-t border-sidebar-border/50 gap-2">
             {!isCollapsed && (
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
-                  外觀
-                </span>
-                <ThemeToggle align="end" side="top" surface="sidebar" />
-              </div>
+              <>
+                {/* Keyboard shortcuts cheat-sheet — visible only when expanded */}
+                <div className="rounded-md border border-sidebar-border/40 bg-sidebar-accent/30 px-2 py-1.5 space-y-0.5 mb-1">
+                  <div className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium px-0.5 mb-1">
+                    快捷鍵
+                  </div>
+                  <ShortcutRow combo="S" label="保存變更" />
+                  <ShortcutRow combo="A" label="全部展開" />
+                  <ShortcutRow combo="Z" label="全部收起" />
+                </div>
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/40 font-medium">
+                    外觀
+                  </span>
+                  <ThemeToggle align="end" side="top" surface="sidebar" />
+                </div>
+              </>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -334,5 +345,28 @@ function DashboardLayoutContent({
         onClose={() => setShowPasswordDialog(false)}
       />
     </>
+  );
+}
+
+/**
+ * Single keyboard shortcut row in the sidebar cheat-sheet.
+ * Renders a compact "label   ⌘+combo" line, with platform-aware modifier:
+ *   - Mac → ⌘
+ *   - Windows / Linux → Ctrl
+ */
+function ShortcutRow({ combo, label }: { combo: string; label: string }) {
+  const isMac =
+    typeof navigator !== "undefined" &&
+    /mac/i.test(navigator.platform || navigator.userAgent || "");
+  const modKey = isMac ? "⌘" : "Ctrl";
+  return (
+    <div className="flex items-center justify-between gap-2 text-[11px] leading-tight">
+      <span className="text-sidebar-foreground/70 truncate">{label}</span>
+      <kbd className="font-mono px-1.5 py-0.5 rounded bg-sidebar-accent/60 text-sidebar-foreground/90 text-[10px] border border-sidebar-border/60 shrink-0">
+        {modKey}
+        <span className="opacity-60 mx-0.5">+</span>
+        {combo}
+      </kbd>
+    </div>
   );
 }
