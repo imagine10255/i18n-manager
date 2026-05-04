@@ -32,6 +32,7 @@ import {
   Globe,
   Key,
   LayoutDashboard,
+  Library,
   LogOut,
   PanelLeft,
   Users,
@@ -65,6 +66,7 @@ const menuGroups: { label: string; items: MenuItem[] }[] = [
     label: "Translation",
     items: [
       { icon: BookOpen, label: "翻譯編輯器", path: "/editor" },
+      { icon: Library, label: "模板字典", path: "/templates" },
       { icon: Clock, label: "修改歷程", path: "/history" },
     ],
   },

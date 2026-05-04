@@ -64,6 +64,7 @@ import {
   ArrowDownAZ,
   Eye,
   Settings2,
+  Library,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -74,6 +75,8 @@ import CreateKeyModal from "@/components/CreateKeyModal";
 import KeyHistoryModal from "@/components/KeyHistoryModal";
 import ProjectHistoryModal from "@/components/ProjectHistoryModal";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
+import ApplyTemplateModal from "@/components/ApplyTemplateModal";
+import LinkTemplateKeyPopover from "@/components/LinkTemplateKeyPopover";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 interface TreeNode {
@@ -92,6 +95,9 @@ interface TreeNode {
   createdAt?: Date;
   /** Persisted display order — smaller = earlier. Folders bubble up min of descendants. */
   sortOrder: number;
+  /** When set, this leaf is referencing a row in `template_keys` —
+   *  values come from the template (Apifox $ref 同步模式). */
+  templateKeyId?: number | null;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -516,6 +522,7 @@ export default function TranslationEditorOptimized() {
               // copy from the underlying key. Default 0 lets new keys (without
               // an explicit reorder) tie and tiebreak by createdAt DESC.
               sortOrder: isLeaf ? ((key as any).sortOrder ?? 0) : Number.POSITIVE_INFINITY,
+              templateKeyId: isLeaf ? ((key as any).templateKeyId ?? null) : null,
             };
             map.set(currentPath, node);
 
@@ -815,6 +822,32 @@ export default function TranslationEditorOptimized() {
       toast.error(`建立失敗: ${error.message}`);
     },
   });
+
+  // ── Template glue ──────────────────────────────────────────────────────────
+  // Detach a project key from its template — keeps the current value in the
+  // project's own translations table so editors don't lose context, then
+  // clears templateKeyId so the row stops resolving via templateTranslations.
+  const unlinkTemplateMutation = trpc.template.unlinkProjectKey.useMutation({
+    onSuccess: () => {
+      toast.success("已解除模板引用，保留當前值");
+      utils.translationKey.listWithTranslations.invalidate();
+      utils.translationKey.listByProject.invalidate();
+    },
+    onError: (e) => toast.error(`解除失敗：${e.message}`),
+  });
+  // Apply (insert) a template into the current project — see ApplyTemplateModal.
+  const applyTemplateMutation = trpc.template.applyToProject.useMutation({
+    onSuccess: (data: any) => {
+      toast.success(
+        `已套用模板（建立 ${data.created}、重用 ${data.reused}、引用 ${data.linked}、複製 ${data.copied} 條）`
+      );
+      utils.translationKey.listByProject.invalidate();
+      utils.translationKey.listWithTranslations.invalidate();
+      setShowApplyTemplate(false);
+    },
+    onError: (e) => toast.error(`套用失敗：${e.message}`),
+  });
+  const [showApplyTemplate, setShowApplyTemplate] = useState(false);
 
   const handleCreateKey = async (keyPath: string, description: string) => {
     if (!selectedProject) return;
@@ -1399,6 +1432,23 @@ export default function TranslationEditorOptimized() {
               新增 Key
             </Button>
 
+            {/* 從模板字典插入 keys（Apifox 風格的 model 引用 / 複製） */}
+            <Button
+              onClick={() => setShowApplyTemplate(true)}
+              disabled={!selectedProject || !canEdit}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              title={
+                !canEdit
+                  ? "需要 editor 以上權限"
+                  : "從共用模板字典套用 keys（可選擇引用同步或一次性複製）"
+              }
+            >
+              <Library className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">從模板插入</span>
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -1697,6 +1747,17 @@ export default function TranslationEditorOptimized() {
                           onViewHistory={(keyId) =>
                             setHistoryKey({ id: keyId, path: node.fullPath })
                           }
+                          onUnlinkTemplate={(keyId, keyPath) => {
+                            if (
+                              confirm(
+                                `解除「${keyPath}」的模板引用？目前的值會被保留至專案內，後續模板更動將不再同步至此 key。`
+                              )
+                            ) {
+                              unlinkTemplateMutation.mutate({
+                                projectKeyId: keyId,
+                              });
+                            }
+                          }}
                           userIdToName={userIdToName}
                         />
                       )}
@@ -1762,6 +1823,23 @@ export default function TranslationEditorOptimized() {
           open={showProjectSettings}
           projectId={selectedProject}
           onClose={() => setShowProjectSettings(false)}
+        />
+
+        {/* Apply a shared template (Apifox-style $ref) into this project. */}
+        <ApplyTemplateModal
+          open={showApplyTemplate}
+          projectId={selectedProject}
+          onClose={() => setShowApplyTemplate(false)}
+          pending={applyTemplateMutation.isPending}
+          onSubmit={({ templateId, mode, templateKeyIds }) => {
+            if (!selectedProject) return;
+            applyTemplateMutation.mutate({
+              projectId: selectedProject,
+              templateId,
+              mode,
+              templateKeyIds,
+            });
+          }}
         />
 
         <CreateKeyModal
@@ -2193,6 +2271,7 @@ function LeafRow({
   onRequestDelete,
   onInsertSibling,
   onViewHistory,
+  onUnlinkTemplate,
   userIdToName,
 }: {
   node: TreeNode;
@@ -2207,6 +2286,7 @@ function LeafRow({
   onRequestDelete: (keyId: number, keyPath: string) => void;
   onInsertSibling: (parentPath: string) => void;
   onViewHistory: (keyId: number) => void;
+  onUnlinkTemplate?: (keyId: number, keyPath: string) => void;
   userIdToName: Map<number, string>;
 }) {
   if (!node.keyId) return null;
@@ -2231,11 +2311,20 @@ function LeafRow({
   const cellBg = "bg-card group-hover/row:bg-muted/70 transition-colors";
   return (
     <div className="group/row w-full h-full flex items-stretch border-b border-border/60 relative">
-      {/* Sticky-left: Key column (accent bar baked in) */}
-      <button
-        type="button"
+      {/* Sticky-left: Key column (accent bar baked in)
+          Use role=button + keyboard handlers so we can embed an inline
+          「引用模板」Popover trigger inside without nesting <button>s. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => onOpenModal(node.keyId!, node.fullPath)}
-        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative pl-4 pr-3 text-left min-w-0 flex items-center gap-2 group/key`}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenModal(node.keyId!, node.fullPath);
+          }
+        }}
+        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative pl-4 pr-3 text-left min-w-0 flex items-center gap-2 group/key cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
         title="點擊以詳細編輯"
       >
         <span
@@ -2250,9 +2339,17 @@ function LeafRow({
           />
         )}
         <span aria-hidden className="shrink-0 w-5" />
-        <div className="flex flex-col justify-center min-w-0">
-          <span className="font-mono text-sm font-medium truncate group-hover/key:text-primary transition-colors">
-            {node.keyPath}
+        <div className="flex flex-col justify-center min-w-0 flex-1">
+          <span className="font-mono text-sm font-medium truncate group-hover/key:text-primary transition-colors flex items-center gap-1.5">
+            <span className="truncate">{node.keyPath}</span>
+            {node.templateKeyId != null && (
+              <span
+                className="inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30"
+                title="此 Key 引用自模板字典；編輯值會同步到模板上的所有引用"
+              >
+                模板
+              </span>
+            )}
           </span>
           {node.description && (
             <span className="text-[11px] text-muted-foreground truncate mt-0.5">
@@ -2260,7 +2357,25 @@ function LeafRow({
             </span>
           )}
         </div>
-      </button>
+        {/* Inline 「引用模板」按鈕 — Apifox 風格 $ref。Hover 才顯，已引用則常駐。 */}
+        {canEdit && (
+          <div
+            className={`shrink-0 ${
+              node.templateKeyId != null
+                ? "opacity-100"
+                : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"
+            } transition-opacity`}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <LinkTemplateKeyPopover
+              projectKeyId={node.keyId}
+              keyPath={node.fullPath}
+              linkedTemplateKeyId={node.templateKeyId ?? null}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Scrolling: locale inputs */}
       <div className={`${LOCALES_COL} flex gap-2 items-center px-3 ${cellBg}`}>
@@ -2390,6 +2505,15 @@ function LeafRow({
                   <Plus className="h-4 w-4 mr-2" />
                   新增同層 Key
                 </DropdownMenuItem>
+                {node.templateKeyId != null && onUnlinkTemplate && (
+                  <DropdownMenuItem
+                    onClick={() => onUnlinkTemplate(node.keyId!, node.fullPath)}
+                    className="cursor-pointer"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    解除模板引用
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => onRequestDelete(node.keyId!, node.fullPath)}

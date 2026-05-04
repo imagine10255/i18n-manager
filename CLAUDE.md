@@ -50,7 +50,7 @@ Projects → TranslationKeys (dot-notation `keyPath`, soft-deleted) → Translat
 
 ### Auth & roles
 
-Users authenticate via Manus OAuth (`/api/oauth/callback`). A JWT is issued and stored as cookie `app_session_id`. Roles: `admin` > `editor` > `rd` / `qa`. The `requireRole` helper in `server/routers.ts` enforces access; `adminProcedure` and `editorProcedure` are role-gated middleware chains built on top of `protectedProcedure`.
+Users authenticate locally via email + password (`auth.localLogin` tRPC mutation). A JWT signed with `JWT_SECRET` is issued and stored as cookie `app_session_id`; verification on every tRPC request happens in `server/_core/sdk.ts` (`authenticateRequest`). No external OAuth provider is used. Roles: `admin` > `editor` > `rd` / `qa`. The `requireRole` helper in `server/routers.ts` enforces access; `adminProcedure` and `editorProcedure` are role-gated middleware chains built on top of `protectedProcedure`.
 
 ### UI components
 
@@ -62,4 +62,4 @@ Drizzle ORM with `mysql2`, targeting MySQL 8.0+ or TiDB. `getDb()` in `server/db
 
 ### Environment variables
 
-Required: `DATABASE_URL`, `VITE_APP_ID`, `OAUTH_SERVER_URL`, `JWT_SECRET`, `OWNER_OPEN_ID`. Optional AI/analytics vars are prefixed `BUILT_IN_FORGE_` or `VITE_`.
+Required: `DATABASE_URL`, `JWT_SECRET`, `OWNER_OPEN_ID`. Optional: `OWNER_NAME`, `LOCAL_AUTH_USERNAME` / `LOCAL_AUTH_PASSWORD` (single shared bootstrap login), and AI/analytics vars prefixed `BUILT_IN_FORGE_` or `VITE_`.

@@ -94,6 +94,16 @@ export const translationKeys = mysqlTable("translation_keys", {
    * created keys (untouched by the "依命名重排" action) tie with each other
    * and the client tiebreaks by createdAt DESC, putting the freshest at top. */
   sortOrder: int("sortOrder").default(0).notNull(),
+  /**
+   * Optional link to a template_keys row. When set, the project's translations
+   * for this key are *resolved from the template* — edits flow through the
+   * template, not the project's own `translations` rows. Set to NULL to
+   * "detach" (一次性複製模板當前值至專案 translations 之後解除引用).
+   *
+   * Acts like Apifox 的 model $ref：模板內容變更，所有 link 到它的 project key
+   * 立即跟著變。
+   */
+  templateKeyId: int("templateKeyId"),
   createdBy: int("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -102,6 +112,7 @@ export const translationKeys = mysqlTable("translation_keys", {
   index("idx_project_key").on(table.projectId, table.keyPath),
   index("idx_is_deleted").on(table.isDeleted),
   index("idx_sort_order").on(table.sortOrder),
+  index("idx_template_key").on(table.templateKeyId),
 ]);
 
 export type TranslationKey = typeof translationKeys.$inferSelect;
@@ -193,3 +204,64 @@ export const translationExports = mysqlTable("translation_exports", {
 
 export type TranslationExport = typeof translationExports.$inferSelect;
 export type InsertTranslationExport = typeof translationExports.$inferInsert;
+
+// ─── Templates (字典/模型) ───────────────────────────────────────────────────
+//
+// 跨專案共用的 i18n 「模型」。靈感來自 Apifox 的 schema/model：
+//   • templates 是一組 key 的集合，每個 key 像一條共用詞條（例如 form.submit）
+//   • templateKeys 與 templateTranslations 與專案的 translation_keys /
+//     translations 結構對齊
+//   • 專案的 translation_keys 可以透過 templateKeyId 「引用」一條模板 key，
+//     也可以選擇把模板 keys 一次性「複製」進專案（不引用，純複製）
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const templates = mysqlTable("templates", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 128 }).notNull().unique(),
+  description: text("description"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdBy: int("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [
+  index("idx_template_name").on(table.name),
+]);
+
+export type Template = typeof templates.$inferSelect;
+export type InsertTemplate = typeof templates.$inferInsert;
+
+export const templateKeys = mysqlTable("template_keys", {
+  id: int("id").autoincrement().primaryKey(),
+  templateId: int("templateId").notNull(),
+  keyPath: varchar("keyPath", { length: 512 }).notNull(),
+  description: text("description"),
+  isDeleted: boolean("isDeleted").default(false).notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  createdBy: int("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => [
+  index("idx_tkey_template").on(table.templateId),
+  index("idx_tkey_path").on(table.templateId, table.keyPath),
+  index("idx_tkey_deleted").on(table.isDeleted),
+]);
+
+export type TemplateKey = typeof templateKeys.$inferSelect;
+export type InsertTemplateKey = typeof templateKeys.$inferInsert;
+
+export const templateTranslations = mysqlTable("template_translations", {
+  id: int("id").autoincrement().primaryKey(),
+  templateKeyId: int("templateKeyId").notNull(),
+  localeCode: varchar("localeCode", { length: 16 }).notNull(),
+  value: text("value"),
+  isTranslated: boolean("isTranslated").default(false).notNull(),
+  updatedBy: int("updatedBy"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("idx_ttr_key_locale").on(table.templateKeyId, table.localeCode),
+  index("idx_ttr_locale").on(table.localeCode),
+]);
+
+export type TemplateTranslation = typeof templateTranslations.$inferSelect;
+export type InsertTemplateTranslation = typeof templateTranslations.$inferInsert;

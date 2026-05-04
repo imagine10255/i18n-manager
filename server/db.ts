@@ -11,6 +11,9 @@ import {
   projects,
   translationVersions,
   translationExports,
+  templates,
+  templateKeys,
+  templateTranslations,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -277,6 +280,7 @@ export async function createTranslationKey(data: {
   keyPath: string;
   description?: string;
   tags?: string;
+  templateKeyId?: number | null;
   createdBy: number;
 }) {
   const db = await getDb();
@@ -371,11 +375,13 @@ export async function updateTranslationKey(
     keyPath: string;
     description: string;
     tags: string;
+    /** null = detach 引用；number = bind 至某條 templateKey */
+    templateKeyId: number | null;
   }>
 ) {
   const db = await getDb();
   if (!db) return;
-  await db.update(translationKeys).set(data).where(eq(translationKeys.id, id));
+  await db.update(translationKeys).set(data as any).where(eq(translationKeys.id, id));
 }
 
 export async function softDeleteTranslationKey(id: number) {
@@ -740,4 +746,458 @@ export async function deleteUser(userId: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(users).where(eq(users.id, userId));
+}
+
+// ─── Template (字典/模型) queries ─────────────────────────────────────────────
+//
+// 這一整段對應 Apifox 的 schema/model：跨專案共用的 i18n 「模型」。
+//   • templates                 — 一個模板（一份 dictionary）
+//   • templateKeys              — 模板內的 key（與 translation_keys 結構同型）
+//   • templateTranslations      — 模板內 key 的多語系值
+//   • translation_keys.templateKeyId — 專案 key 對模板 key 的「引用」連結
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getAllTemplates() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(templates).orderBy(asc(templates.name));
+}
+
+export async function getTemplateById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db
+    .select()
+    .from(templates)
+    .where(eq(templates.id, id))
+    .limit(1);
+  return (result as any[])[0] ?? null;
+}
+
+export async function createTemplate(data: {
+  name: string;
+  description?: string;
+  createdBy: number;
+}) {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.insert(templates).values(data);
+  return Number((result as any).insertId ?? 0);
+}
+
+export async function updateTemplate(
+  id: number,
+  data: Partial<{ name: string; description: string; isActive: boolean }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(templates).set(data).where(eq(templates.id, id));
+}
+
+export async function deleteTemplate(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  // Detach any project keys still referencing this template's keys before
+  // deleting, to avoid dangling templateKeyId pointers in translation_keys.
+  const keysOfTemplate = await db
+    .select({ id: templateKeys.id })
+    .from(templateKeys)
+    .where(eq(templateKeys.templateId, id));
+  const keyIds = (keysOfTemplate as any[]).map((r) => r.id as number);
+  if (keyIds.length > 0) {
+    await db
+      .update(translationKeys)
+      .set({ templateKeyId: null })
+      .where(inArray(translationKeys.templateKeyId, keyIds));
+    await db
+      .delete(templateTranslations)
+      .where(inArray(templateTranslations.templateKeyId, keyIds));
+    await db.delete(templateKeys).where(eq(templateKeys.templateId, id));
+  }
+  await db.delete(templates).where(eq(templates.id, id));
+}
+
+// ── Template keys ───────────────────────────────────────────────────────────
+
+export async function getTemplateKeys(options?: {
+  templateId?: number;
+  search?: string;
+  includeDeleted?: boolean;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (!options?.includeDeleted) {
+    conditions.push(eq(templateKeys.isDeleted, false));
+  }
+  if (options?.templateId) {
+    conditions.push(eq(templateKeys.templateId, options.templateId));
+  }
+  if (options?.search) {
+    conditions.push(
+      sql`${templateKeys.keyPath} LIKE ${options.search + "%"}`
+    );
+  }
+  const query = db.select().from(templateKeys);
+  if (conditions.length > 0) {
+    return query.where(and(...conditions)).orderBy(asc(templateKeys.keyPath));
+  }
+  return query.orderBy(asc(templateKeys.keyPath));
+}
+
+export async function getTemplateKeysByIds(ids: number[]) {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  return db.select().from(templateKeys).where(inArray(templateKeys.id, ids));
+}
+
+export async function createTemplateKey(data: {
+  templateId: number;
+  keyPath: string;
+  description?: string;
+  createdBy: number;
+}) {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.insert(templateKeys).values(data);
+  return Number((result as any).insertId ?? 0);
+}
+
+export async function updateTemplateKey(
+  id: number,
+  data: Partial<{ keyPath: string; description: string; sortOrder: number }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(templateKeys).set(data).where(eq(templateKeys.id, id));
+}
+
+/**
+ * Soft-delete a template key. Also detaches any project translation_keys
+ * that still pointed at this template key — they keep their last seen value
+ * by upserting it into the project's `translations` table before unlinking.
+ */
+export async function deleteTemplateKey(id: number) {
+  const db = await getDb();
+  if (!db) return;
+
+  // 1) Take a snapshot of this template key's current values per locale so we
+  //    can persist them onto the linked project keys before detaching.
+  const tValues = await db
+    .select()
+    .from(templateTranslations)
+    .where(eq(templateTranslations.templateKeyId, id));
+
+  const linkedProjectKeys = await db
+    .select({ id: translationKeys.id })
+    .from(translationKeys)
+    .where(eq(translationKeys.templateKeyId, id));
+  const projectKeyIds = (linkedProjectKeys as any[]).map((r) => r.id as number);
+
+  if (projectKeyIds.length > 0 && (tValues as any[]).length > 0) {
+    for (const pid of projectKeyIds) {
+      for (const tv of tValues as any[]) {
+        await db
+          .insert(translations)
+          .values({
+            keyId: pid,
+            localeCode: tv.localeCode,
+            value: tv.value,
+            isTranslated: !!tv.isTranslated,
+            updatedBy: tv.updatedBy ?? null,
+          })
+          .onDuplicateKeyUpdate({
+            set: {
+              value: tv.value,
+              isTranslated: !!tv.isTranslated,
+              updatedBy: tv.updatedBy ?? null,
+            },
+          });
+      }
+    }
+  }
+
+  if (projectKeyIds.length > 0) {
+    await db
+      .update(translationKeys)
+      .set({ templateKeyId: null })
+      .where(inArray(translationKeys.id, projectKeyIds));
+  }
+
+  await db
+    .update(templateKeys)
+    .set({ isDeleted: true })
+    .where(eq(templateKeys.id, id));
+}
+
+// ── Template translations ────────────────────────────────────────────────────
+
+export async function getTemplateTranslationsByKeyIds(keyIds: number[]) {
+  const db = await getDb();
+  if (!db || keyIds.length === 0) return [];
+  return db
+    .select()
+    .from(templateTranslations)
+    .where(inArray(templateTranslations.templateKeyId, keyIds));
+}
+
+export async function upsertTemplateTranslation(data: {
+  templateKeyId: number;
+  localeCode: string;
+  value: string;
+  isTranslated: boolean;
+  updatedBy: number;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(templateTranslations)
+    .values(data)
+    .onDuplicateKeyUpdate({
+      set: {
+        value: data.value,
+        isTranslated: data.isTranslated,
+        updatedBy: data.updatedBy,
+      },
+    });
+}
+
+// ── Project ↔ template glue ──────────────────────────────────────────────────
+
+/**
+ * Bind an existing project translation_key to a template key (Apifox 的 $ref
+ * 同步模式：以後此 key 的多語系值會從 templateTranslations 取得)。
+ */
+export async function linkProjectKeyToTemplate(
+  projectKeyId: number,
+  templateKeyId: number
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(translationKeys)
+    .set({ templateKeyId })
+    .where(eq(translationKeys.id, projectKeyId));
+}
+
+/**
+ * Detach a project key from its template (複製當前模板值落地後解除 link)。
+ * 與 deleteTemplateKey 採同樣的「先快照，再解除」策略，確保 detach 後不會
+ * 看起來「翻譯憑空消失」。
+ */
+export async function unlinkProjectKeyFromTemplate(projectKeyId: number) {
+  const db = await getDb();
+  if (!db) return;
+  const row = await db
+    .select({ templateKeyId: translationKeys.templateKeyId })
+    .from(translationKeys)
+    .where(eq(translationKeys.id, projectKeyId))
+    .limit(1);
+  const tkid = (row as any[])[0]?.templateKeyId as number | null | undefined;
+  if (tkid) {
+    const tValues = await db
+      .select()
+      .from(templateTranslations)
+      .where(eq(templateTranslations.templateKeyId, tkid));
+    for (const tv of tValues as any[]) {
+      await db
+        .insert(translations)
+        .values({
+          keyId: projectKeyId,
+          localeCode: tv.localeCode,
+          value: tv.value,
+          isTranslated: !!tv.isTranslated,
+          updatedBy: tv.updatedBy ?? null,
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            value: tv.value,
+            isTranslated: !!tv.isTranslated,
+            updatedBy: tv.updatedBy ?? null,
+          },
+        });
+    }
+  }
+  await db
+    .update(translationKeys)
+    .set({ templateKeyId: null })
+    .where(eq(translationKeys.id, projectKeyId));
+}
+
+/**
+ * Apply a template into a project — for each templateKey:
+ *   • mode = "reference": create a project key (or reuse if same keyPath) and
+ *     bind templateKeyId. Project values come from the template thereafter.
+ *   • mode = "copy": create a project key (or reuse) without binding,
+ *     and copy the template's current translations into the project's
+ *     `translations` rows. Future changes to the template don't propagate.
+ *
+ * Returns counts so the UI can show a useful toast.
+ */
+export async function applyTemplateToProject(input: {
+  templateId: number;
+  projectId: number;
+  mode: "reference" | "copy";
+  /** Optional subset of templateKeyIds; if omitted, applies all active keys. */
+  templateKeyIds?: number[];
+  createdBy: number;
+}): Promise<{ created: number; reused: number; linked: number; copied: number }> {
+  const db = await getDb();
+  if (!db) return { created: 0, reused: 0, linked: 0, copied: 0 };
+
+  // Pull the template's keys (filtered to selected ids if any)
+  const tKeysCond: any[] = [
+    eq(templateKeys.templateId, input.templateId),
+    eq(templateKeys.isDeleted, false),
+  ];
+  if (input.templateKeyIds && input.templateKeyIds.length > 0) {
+    tKeysCond.push(inArray(templateKeys.id, input.templateKeyIds));
+  }
+  const tKeys = await db
+    .select()
+    .from(templateKeys)
+    .where(and(...tKeysCond));
+
+  if ((tKeys as any[]).length === 0) {
+    return { created: 0, reused: 0, linked: 0, copied: 0 };
+  }
+
+  // Existing project keys (alive only) — keyed by keyPath for reuse
+  const existing = await db
+    .select({ id: translationKeys.id, keyPath: translationKeys.keyPath })
+    .from(translationKeys)
+    .where(
+      and(
+        eq(translationKeys.projectId, input.projectId),
+        eq(translationKeys.isDeleted, false)
+      )
+    );
+  const existingByPath = new Map<string, number>();
+  for (const e of existing as any[]) existingByPath.set(e.keyPath, e.id);
+
+  let created = 0;
+  let reused = 0;
+  let linked = 0;
+  let copied = 0;
+
+  // Pre-fetch template translations for all selected keys at once
+  const tValues = await getTemplateTranslationsByKeyIds(
+    (tKeys as any[]).map((k) => k.id as number)
+  );
+  const tValuesByKeyId = new Map<number, any[]>();
+  for (const tv of tValues as any[]) {
+    const arr = tValuesByKeyId.get(tv.templateKeyId) ?? [];
+    arr.push(tv);
+    tValuesByKeyId.set(tv.templateKeyId, arr);
+  }
+
+  for (const tk of tKeys as any[]) {
+    let projectKeyId: number;
+    if (existingByPath.has(tk.keyPath)) {
+      projectKeyId = existingByPath.get(tk.keyPath)!;
+      reused++;
+    } else {
+      projectKeyId = await createTranslationKey({
+        projectId: input.projectId,
+        keyPath: tk.keyPath,
+        description: tk.description ?? undefined,
+        createdBy: input.createdBy,
+      });
+      created++;
+    }
+
+    if (input.mode === "reference") {
+      await linkProjectKeyToTemplate(projectKeyId, tk.id);
+      linked++;
+    } else {
+      // copy mode — drop the template's current values into the project's
+      // `translations` table (no link).
+      const arr = tValuesByKeyId.get(tk.id) ?? [];
+      for (const tv of arr) {
+        await db
+          .insert(translations)
+          .values({
+            keyId: projectKeyId,
+            localeCode: tv.localeCode,
+            value: tv.value,
+            isTranslated: !!tv.isTranslated,
+            updatedBy: input.createdBy,
+          })
+          .onDuplicateKeyUpdate({
+            set: {
+              value: tv.value,
+              isTranslated: !!tv.isTranslated,
+              updatedBy: input.createdBy,
+            },
+          });
+        copied++;
+      }
+    }
+  }
+
+  return { created, reused, linked, copied };
+}
+
+/**
+ * Resolve a list of project translation keys to their *effective* values per
+ * locale, reading from templateTranslations when templateKeyId is set and
+ * falling back to the project's own translations row otherwise. Returns a
+ * flat array shaped like `translations` (so the existing editor code keeps
+ * working). When a key is template-linked, an extra `fromTemplate: true` flag
+ * is set so the UI can show the badge.
+ */
+export async function getResolvedTranslationsForProjectKeys(
+  projectKeys: Array<{ id: number; templateKeyId: number | null | undefined }>
+): Promise<
+  Array<{
+    keyId: number;
+    localeCode: string;
+    value: string | null;
+    isTranslated: boolean;
+    updatedBy: number | null;
+    updatedAt: Date | null;
+    fromTemplate?: boolean;
+  }>
+> {
+  if (projectKeys.length === 0) return [];
+  const linkedKeys = projectKeys.filter((k) => !!k.templateKeyId);
+  const unlinkedKeys = projectKeys.filter((k) => !k.templateKeyId);
+
+  const ownRows = await getTranslationsByKeyIds(unlinkedKeys.map((k) => k.id));
+  const out: Array<any> = (ownRows as any[]).map((r) => ({
+    keyId: r.keyId,
+    localeCode: r.localeCode,
+    value: r.value,
+    isTranslated: !!r.isTranslated,
+    updatedBy: r.updatedBy ?? null,
+    updatedAt: r.updatedAt ?? null,
+  }));
+
+  if (linkedKeys.length > 0) {
+    const tKeyIds = Array.from(
+      new Set(linkedKeys.map((k) => k.templateKeyId as number))
+    );
+    const tRows = await getTemplateTranslationsByKeyIds(tKeyIds);
+    const tRowsByTKey = new Map<number, any[]>();
+    for (const tr of tRows as any[]) {
+      const arr = tRowsByTKey.get(tr.templateKeyId) ?? [];
+      arr.push(tr);
+      tRowsByTKey.set(tr.templateKeyId, arr);
+    }
+    for (const k of linkedKeys) {
+      const arr = tRowsByTKey.get(k.templateKeyId as number) ?? [];
+      for (const tr of arr) {
+        out.push({
+          keyId: k.id,
+          localeCode: tr.localeCode,
+          value: tr.value,
+          isTranslated: !!tr.isTranslated,
+          updatedBy: tr.updatedBy ?? null,
+          updatedAt: tr.updatedAt ?? null,
+          fromTemplate: true,
+        });
+      }
+    }
+  }
+  return out;
 }

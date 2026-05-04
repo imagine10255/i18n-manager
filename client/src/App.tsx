@@ -11,6 +11,7 @@ import TranslationEditorOptimized from "./pages/TranslationEditorOptimized";
 import HistoryPage from "./pages/HistoryPage";
 import UserManager from "./pages/UserManager";
 import Home from "./pages/Home";
+import TemplateManager from "./pages/TemplateManager";
 
 function Router() {
   return (
@@ -20,6 +21,7 @@ function Router() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/locales" component={LocaleManager} />
       <Route path="/editor" component={TranslationEditorOptimized} />
+      <Route path="/templates" component={TemplateManager} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/users" component={UserManager} />
       <Route path="/404" component={NotFound} />

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -47,6 +47,23 @@ import {
   createExport,
   getDb,
   getTranslationsByKeyId,
+  // Template helpers
+  getAllTemplates,
+  getTemplateById,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  getTemplateKeys,
+  getTemplateKeysByIds,
+  createTemplateKey,
+  updateTemplateKey,
+  deleteTemplateKey,
+  getTemplateTranslationsByKeyIds,
+  upsertTemplateTranslation,
+  linkProjectKeyToTemplate,
+  unlinkProjectKeyFromTemplate,
+  applyTemplateToProject,
+  getResolvedTranslationsForProjectKeys,
 } from "./db";
 import type { User } from "../drizzle/schema";
 
@@ -245,8 +262,13 @@ const translationKeyRouter = router({
         projectId: input.projectId,
         search: input.search,
       });
-      const keyIds = keys.map((k) => k.id);
-      const allTranslations = await getTranslationsByKeyIds(keyIds);
+      // Template-aware translation resolution: keys with `templateKeyId` set
+      // pull their values from `template_translations`, otherwise from the
+      // project's own `translations` rows. Each cell carries `fromTemplate`
+      // so the editor can show the 「模板」 badge.
+      const allTranslations = await getResolvedTranslationsForProjectKeys(
+        keys.map((k: any) => ({ id: k.id, templateKeyId: k.templateKeyId ?? null }))
+      );
 
       // 收集該版本中有異動的 (keyId, localeCode) — 用於亮顯異動 cell
       // 注意：版本檢視預設「顯示全部 Key 的最新值」，只是把該版本內被動到的 cell 標亮。
@@ -276,6 +298,8 @@ const translationKeyRouter = router({
         updatedBy?: number | null;
         /** True iff this (key, locale) was modified in the selected version. */
         changedInVersion?: boolean;
+        /** True iff the value came from a referenced template (Apifox $ref). */
+        fromTemplate?: boolean;
       };
 
       const result = filteredKeys.map((key) => {
@@ -291,6 +315,7 @@ const translationKeyRouter = router({
             changedInVersion: input.versionId
               ? changedInVersion.has(`${key.id}:${t.localeCode}`)
               : undefined,
+            fromTemplate: (t as any).fromTemplate === true,
           };
         }
         return { ...key, translations: localeValues };
@@ -424,6 +449,25 @@ const translationKeyRouter = router({
 });
 
 // ─── Translation router ───────────────────────────────────────────────────────
+//
+// Template-aware write path: if the project key has `templateKeyId` set, the
+// edit is rerouted to upsertTemplateTranslation — the project's own
+// `translations` row would be ignored by resolution anyway, and the user's
+// intent is "edit the value as displayed", which is the template's value.
+async function getTemplateKeyIdMap(keyIds: number[]): Promise<Map<number, number | null>> {
+  const out = new Map<number, number | null>();
+  if (keyIds.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  const { translationKeys } = await import("../drizzle/schema");
+  const rows = await db
+    .select({ id: translationKeys.id, templateKeyId: translationKeys.templateKeyId })
+    .from(translationKeys)
+    .where(inArray(translationKeys.id, keyIds));
+  for (const r of rows as any[]) out.set(r.id, r.templateKeyId ?? null);
+  return out;
+}
+
 const translationRouter = router({
   updateValue: editorProcedure
     .input(
@@ -434,11 +478,23 @@ const translationRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await upsertTranslation({
-        ...input,
-        isTranslated: input.value.length > 0,
-        updatedBy: ctx.user.id,
-      });
+      const tMap = await getTemplateKeyIdMap([input.keyId]);
+      const tkid = tMap.get(input.keyId) ?? null;
+      if (tkid) {
+        await upsertTemplateTranslation({
+          templateKeyId: tkid,
+          localeCode: input.localeCode,
+          value: input.value,
+          isTranslated: input.value.length > 0,
+          updatedBy: ctx.user.id,
+        });
+      } else {
+        await upsertTranslation({
+          ...input,
+          isTranslated: input.value.length > 0,
+          updatedBy: ctx.user.id,
+        });
+      }
       await createTranslationHistory({
         keyId: input.keyId,
         localeCode: input.localeCode,
@@ -447,7 +503,7 @@ const translationRouter = router({
         changedBy: ctx.user.id,
         action: "update",
       });
-      return { success: true };
+      return { success: true, viaTemplate: !!tkid };
     }),
   batchUpdate: editorProcedure
     .input(
@@ -463,13 +519,27 @@ const translationRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const tMap = await getTemplateKeyIdMap(
+        Array.from(new Set(input.updates.map((u) => u.keyId)))
+      );
       for (const update of input.updates) {
-        await upsertTranslation({
-          ...update,
-          isTranslated: update.value.length > 0,
-          updatedBy: ctx.user.id,
-          versionId: input.versionId,
-        });
+        const tkid = tMap.get(update.keyId) ?? null;
+        if (tkid) {
+          await upsertTemplateTranslation({
+            templateKeyId: tkid,
+            localeCode: update.localeCode,
+            value: update.value,
+            isTranslated: update.value.length > 0,
+            updatedBy: ctx.user.id,
+          });
+        } else {
+          await upsertTranslation({
+            ...update,
+            isTranslated: update.value.length > 0,
+            updatedBy: ctx.user.id,
+            versionId: input.versionId,
+          });
+        }
         await createTranslationHistory({
           keyId: update.keyId,
           localeCode: update.localeCode,
@@ -743,6 +813,239 @@ const userRouter = router({
     }),
 });
 
+// ─── Template (字典/模型) router ──────────────────────────────────────────────
+//
+// 對應 Apifox 的 schema/model：跨專案共用的詞條集。模板上的修改會即時反映到
+// 所有 reference 過它的 project key (因為 listWithTranslations 會以
+// templateKeyId resolve 出值)。專案 key 也可選擇 `mode: "copy"` 一次性複製
+// 模板當前值，後續獨立維護。
+const templateRouter = router({
+  list: protectedProcedure.query(() => getAllTemplates()),
+  get: protectedProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(({ input }) => getTemplateById(input.id)),
+  create: editorProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(128),
+        description: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const id = await createTemplate({ ...input, createdBy: ctx.user.id });
+      return { id };
+    }),
+  update: editorProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        name: z.string().min(1).max(128).optional(),
+        description: z.string().optional(),
+        isActive: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      await updateTemplate(id, data);
+      return { success: true };
+    }),
+  delete: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input }) => {
+      await deleteTemplate(input.id);
+      return { success: true };
+    }),
+
+  // ── Template keys ─────────────────────────────────────────────────────────
+  listKeys: protectedProcedure
+    .input(
+      z.object({
+        templateId: z.number().int(),
+        search: z.string().optional(),
+      })
+    )
+    .query(({ input }) => getTemplateKeys({ templateId: input.templateId, search: input.search })),
+
+  /**
+   * Flat 列出所有模板的 keys（含 templateId / templateName），給專案編輯器
+   * 的「引用模板」popover 一次抓完用。資料量通常很小（<幾百筆），不需要分頁。
+   */
+  listAllKeysFlat: protectedProcedure.query(async () => {
+    const tpls = await getAllTemplates();
+    const allKeys = await getTemplateKeys({});
+    const tMap = new Map<number, { id: number; name: string }>();
+    for (const t of tpls as any[]) tMap.set(t.id, { id: t.id, name: t.name });
+    return (allKeys as any[]).map((k) => ({
+      keyId: k.id,
+      keyPath: k.keyPath,
+      description: k.description ?? null,
+      templateId: k.templateId,
+      templateName: tMap.get(k.templateId)?.name ?? "?",
+    }));
+  }),
+
+  /** 模板的 key + 多語系值，整理成跟 listWithTranslations 一致的形狀。 */
+  listKeysWithTranslations: protectedProcedure
+    .input(
+      z.object({
+        templateId: z.number().int(),
+        search: z.string().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      const keys = await getTemplateKeys({
+        templateId: input.templateId,
+        search: input.search,
+      });
+      const keyIds = (keys as any[]).map((k) => k.id as number);
+      const trs = await getTemplateTranslationsByKeyIds(keyIds);
+      type Cell = {
+        value: string | null;
+        isTranslated: boolean;
+        updatedAt?: Date | null;
+        updatedBy?: number | null;
+      };
+      return (keys as any[]).map((k) => {
+        const cells: Record<string, Cell> = {};
+        for (const t of (trs as any[]).filter((x) => x.templateKeyId === k.id)) {
+          cells[t.localeCode] = {
+            value: t.value,
+            isTranslated: !!t.isTranslated,
+            updatedAt: t.updatedAt ?? null,
+            updatedBy: t.updatedBy ?? null,
+          };
+        }
+        return { ...k, translations: cells };
+      });
+    }),
+
+  createKey: editorProcedure
+    .input(
+      z.object({
+        templateId: z.number().int(),
+        keyPath: z.string().min(1).max(512),
+        description: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const existing = await getTemplateKeys({ templateId: input.templateId });
+      if ((existing as any[]).some((k: any) => k.keyPath === input.keyPath)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `模板 key「${input.keyPath}」已存在`,
+        });
+      }
+      const id = await createTemplateKey({ ...input, createdBy: ctx.user.id });
+      return { id };
+    }),
+  updateKey: editorProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        keyPath: z.string().min(1).max(512).optional(),
+        description: z.string().optional(),
+        sortOrder: z.number().int().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      await updateTemplateKey(id, data);
+      return { success: true };
+    }),
+  deleteKey: editorProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input }) => {
+      await deleteTemplateKey(input.id);
+      return { success: true };
+    }),
+
+  // ── Template translation values ──────────────────────────────────────────
+  /** Update a single value on a template key — propagates to all references. */
+  upsertValue: editorProcedure
+    .input(
+      z.object({
+        templateKeyId: z.number().int(),
+        localeCode: z.string().min(2).max(16),
+        value: z.string(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      await upsertTemplateTranslation({
+        ...input,
+        isTranslated: input.value.length > 0,
+        updatedBy: ctx.user.id,
+      });
+      return { success: true };
+    }),
+  /** Batch upsert template values (mirrors translation.batchUpdate). */
+  batchUpsertValues: editorProcedure
+    .input(
+      z.object({
+        updates: z.array(
+          z.object({
+            templateKeyId: z.number().int(),
+            localeCode: z.string().min(2).max(16),
+            value: z.string(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      for (const u of input.updates) {
+        await upsertTemplateTranslation({
+          ...u,
+          isTranslated: u.value.length > 0,
+          updatedBy: ctx.user.id,
+        });
+      }
+      return { success: true, updated: input.updates.length };
+    }),
+
+  // ── Project ↔ template glue ──────────────────────────────────────────────
+  /** Bind a project key to a template key (sync mode). */
+  linkProjectKey: editorProcedure
+    .input(
+      z.object({
+        projectKeyId: z.number().int(),
+        templateKeyId: z.number().int(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      await linkProjectKeyToTemplate(input.projectKeyId, input.templateKeyId);
+      return { success: true };
+    }),
+  /** Detach a project key from its template (一次性落地當前值)。 */
+  unlinkProjectKey: editorProcedure
+    .input(z.object({ projectKeyId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      await unlinkProjectKeyFromTemplate(input.projectKeyId);
+      return { success: true };
+    }),
+  /**
+   * Apply a template into a project. `mode: "reference"` 採同步模式，
+   * `mode: "copy"` 採一次性複製模式（之後獨立維護）。
+   */
+  applyToProject: editorProcedure
+    .input(
+      z.object({
+        templateId: z.number().int(),
+        projectId: z.number().int(),
+        mode: z.enum(["reference", "copy"]).default("reference"),
+        templateKeyIds: z.array(z.number().int()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const stats = await applyTemplateToProject({
+        templateId: input.templateId,
+        projectId: input.projectId,
+        mode: input.mode,
+        templateKeyIds: input.templateKeyIds,
+        createdBy: ctx.user.id,
+      });
+      return { success: true, ...stats };
+    }),
+});
+
 // ─── Main app router ──────────────────────────────────────────────────────────
 export const appRouter = router({
   system: systemRouter,
@@ -841,6 +1144,7 @@ export const appRouter = router({
   translationVersion: translationVersionRouter,
   translationKey: translationKeyRouter,
   translation: translationRouter,
+  template: templateRouter,
   stats: statsRouter,
   user: userRouter,
 });
