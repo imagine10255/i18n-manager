@@ -1,19 +1,29 @@
 /**
- * 模板字典管理頁。靈感來自 Apifox 的「模型/Schema」：跨專案共用的 i18n 詞條集。
+ * SharedKeysManager — 跨專案共用的平面字典池編輯器。
  *
- * 單一面板版本：
- *   • Header 上方一條 toolbar：模板選擇下拉、新增模板、刪除模板、新增 Key、搜尋
- *   • 下方就是當前模板的 keys × locales 直編表格（onBlur commit）
+ * 介面完全對齊 TranslationEditor：
+ *   • 同款 sticky KEY/LOCALES/META 三欄
+ *   • Folder（群組）/ Leaf row 樣式一致
+ *   • Pending updates → 保存（批次）模式，不會邊改邊 commit
+ *   • 歷程 / 顯示語系 / 統計 pills / 已同步狀態
  *
- * 編輯模板裡的值 → 所有 reference 過此 key 的專案 key 立即同步。
+ * 與 TranslationEditor 的差異：
+ *   • 沒有「專案 / 版本」概念（這就是字典池本體）
+ *   • 沒有「設定」與「從共用字典插入」（不適用）
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { useAuth } from "@/_core/hooks/useAuth";
-import DashboardLayout from "@/components/DashboardLayout";
-import { Badge } from "@/components/ui/badge";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -21,500 +31,1477 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { trpc } from "@/lib/trpc";
-import { Library, Plus, Search, Trash2, KeyRound } from "lucide-react";
-import { toast } from "sonner";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { LocaleFlag } from "@/components/LocaleFlag";
+import { findPreset } from "@/lib/localePresets";
+import {
+  ArrowDownAZ,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Eye,
+  FileJson,
+  FolderTree,
+  History,
+  KeyRound,
+  Languages,
+  Library,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  MoreVertical,
+  Plus,
+  Save,
+  Search,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import { toast } from "sonner";
+import DashboardLayout from "@/components/DashboardLayout";
+import KeyHistoryModal from "@/components/KeyHistoryModal";
 
-export default function TemplateManager() {
-  const { } = useAuth();
+// ────────────────────────────────────────────────────────────
+// Layout constants — keep in sync with TranslationEditorOptimized
+// ────────────────────────────────────────────────────────────
+const ROW_HEIGHT = 56;
+const KEY_COL = "min-w-[260px] flex-[0_0_280px]";
+const META_COL = "hidden md:flex flex-[0_0_auto] w-[120px]";
+const LOCALES_COL = "flex-1 min-w-0";
+
+const STICKY_LEFT = "sticky left-0 z-[2]";
+const STICKY_META = "sticky right-8 z-[2]";
+const STICKY_KEBAB = "sticky right-0 z-[2]";
+const STICKY_LEFT_SHADOW =
+  "shadow-[6px_0_10px_-8px_rgba(0,0,0,0.25)] dark:shadow-[6px_0_10px_-8px_rgba(0,0,0,0.6)]";
+const STICKY_RIGHT_SHADOW =
+  "shadow-[-6px_0_10px_-8px_rgba(0,0,0,0.25)] dark:shadow-[-6px_0_10px_-8px_rgba(0,0,0,0.6)]";
+
+// ────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────
+function localeChineseName(locale: {
+  code: string;
+  name?: string;
+  nativeName?: string;
+}) {
+  const preset = findPreset(locale.code);
+  if (preset) return preset.name;
+  return locale.name || locale.nativeName || locale.code;
+}
+
+function formatRelativeOrDate(d: Date): string {
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 0)
+    return d.toLocaleDateString("zh-TW", { month: "short", day: "numeric" });
+  if (sec < 60) return "剛剛";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} 分鐘前`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} 小時前`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day} 天前`;
+  return d.toLocaleDateString("zh-TW", { month: "short", day: "numeric" });
+}
+
+function buildNestedJson(
+  pairs: Array<{ keyPath: string; value: string }>
+): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const { keyPath, value } of pairs) {
+    if (!value) continue;
+    const parts = keyPath.split(".");
+    let cur: any = result;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      if (!cur[seg] || typeof cur[seg] !== "object") cur[seg] = {};
+      cur = cur[seg];
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  return result;
+}
+
+function flattenJson(
+  obj: any,
+  prefix = "",
+  out: Record<string, string> = {}
+): Record<string, string> {
+  if (obj == null || typeof obj !== "object") return out;
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      flattenJson(v, key, out);
+    } else if (typeof v === "string") {
+      out[key] = v;
+    } else if (typeof v === "number" || typeof v === "boolean") {
+      out[key] = String(v);
+    }
+  }
+  return out;
+}
+
+function downloadFile(filename: string, content: string, mime = "application/json") {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ────────────────────────────────────────────────────────────
+// Tree node
+// ────────────────────────────────────────────────────────────
+interface SharedTreeNode {
+  id: string;
+  fullPath: string;
+  keyPath: string;
+  isFolder: boolean;
+  isExpanded: boolean;
+  children: SharedTreeNode[];
+  level: number;
+  keyId?: number;
+  description?: string;
+  lastModified?: Date;
+  lastModifiedBy?: number;
+  sortOrder: number;
+}
+
+// ────────────────────────────────────────────────────────────
+// Page
+// ────────────────────────────────────────────────────────────
+export default function SharedKeysManager() {
   const { data: user } = trpc.auth.me.useQuery();
   const role = (user as { role?: string })?.role ?? "rd";
   const canEdit = role === "admin" || role === "editor";
-  const isAdmin = role === "admin";
 
   const utils = trpc.useUtils();
+  const { data: localesData } = trpc.locale.listActive.useQuery();
+  const allLocales = (localesData ?? []) as Array<{
+    id: number;
+    code: string;
+    name: string;
+    nativeName: string;
+  }>;
 
-  const { data: templates, isLoading: tplLoading } = trpc.template.list.useQuery();
-  const { data: locales } = trpc.locale.listActive.useQuery();
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { data: usersBasic } = trpc.user.listBasic.useQuery();
+  const userIdToName = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const u of (usersBasic ?? []) as any[]) m.set(u.id, u.name ?? "");
+    return m;
+  }, [usersBasic]);
 
-  // 預設選第一個模板（在 list 載入後）
+  const { data: keysWithTrans, isLoading } =
+    trpc.sharedKey.listWithTranslations.useQuery({});
+  const allKeys = (keysWithTrans ?? []) as any[];
+
+  // ── locale visibility (localStorage) ──────────────────────────────────────
+  const LS_KEY = "shared-keys-hidden-locales";
+  const [hiddenLocaleCodes, setHiddenLocaleCodesState] = useState<Set<string>>(
+    new Set()
+  );
   useEffect(() => {
-    if (!selectedId && templates && templates.length > 0) {
-      setSelectedId(templates[0].id);
+    try {
+      const raw = window.localStorage.getItem(LS_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        setHiddenLocaleCodesState(
+          new Set(Array.isArray(arr) ? (arr as string[]) : [])
+        );
+      }
+    } catch {
+      /* ignore */
     }
-    // 若選的模板被刪掉了，自動 fallback
-    if (
-      selectedId &&
-      templates &&
-      !templates.some((t: any) => t.id === selectedId)
-    ) {
-      setSelectedId(templates[0]?.id ?? null);
+  }, []);
+  const setHiddenLocaleCodes = useCallback((next: Set<string>) => {
+    setHiddenLocaleCodesState(next);
+    try {
+      window.localStorage.setItem(LS_KEY, JSON.stringify(Array.from(next)));
+    } catch {
+      /* ignore */
     }
-  }, [templates, selectedId]);
+  }, []);
+  const locales = useMemo(
+    () => allLocales.filter((l) => !hiddenLocaleCodes.has(l.code)),
+    [allLocales, hiddenLocaleCodes]
+  );
 
-  const createTemplate = trpc.template.create.useMutation({
-    onSuccess: ({ id }) => {
-      toast.success("模板已建立");
-      utils.template.list.invalidate();
-      setSelectedId(id);
-      setShowCreate(false);
-      setTName("");
-      setTDesc("");
-    },
-    onError: (e) => toast.error(`建立失敗：${e.message}`),
+  // ── search / expand ───────────────────────────────────────────────────────
+  const [searchTerm, setSearchTerm] = useState("");
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+
+  // ── pending edits ─────────────────────────────────────────────────────────
+  const [pendingUpdates, setPendingUpdates] = useState<
+    Map<string, { sharedKeyId: number; localeCode: string; value: string }>
+  >(new Map());
+  const hasChanges = pendingUpdates.size > 0;
+
+  // ── modals ────────────────────────────────────────────────────────────────
+  const [showAddKey, setShowAddKey] = useState(false);
+  const [historyKey, setHistoryKey] = useState<{
+    id: number;
+    path: string;
+  } | null>(null);
+  const [deletingKey, setDeletingKey] = useState<{
+    ids: number[];
+    path: string;
+    isFolder?: boolean;
+  } | null>(null);
+
+  // ── tree build ────────────────────────────────────────────────────────────
+  const tree = useMemo<SharedTreeNode[]>(() => {
+    const filtered = searchTerm.trim()
+      ? allKeys.filter((k) => {
+          const q = searchTerm.trim().toLowerCase();
+          return (
+            k.keyPath.toLowerCase().includes(q) ||
+            (k.description ?? "").toLowerCase().includes(q)
+          );
+        })
+      : allKeys;
+
+    const map = new Map<string, SharedTreeNode>();
+    for (const k of filtered) {
+      const parts = (k.keyPath as string).split(".");
+      let currentPath = "";
+      for (let i = 0; i < parts.length; i++) {
+        currentPath = i === 0 ? parts[0] : `${currentPath}.${parts[i]}`;
+        if (map.has(currentPath)) continue;
+        const isLeaf = i === parts.length - 1;
+
+        let latestAt: Date | undefined;
+        let latestBy: number | undefined;
+        if (isLeaf) {
+          for (const cell of Object.values(k.translations ?? {}) as any[]) {
+            const at = cell?.updatedAt ? new Date(cell.updatedAt) : undefined;
+            if (at && (!latestAt || at > latestAt)) {
+              latestAt = at;
+              latestBy = cell?.updatedBy ?? undefined;
+            }
+          }
+        }
+
+        const node: SharedTreeNode = {
+          id: `node-${currentPath}`,
+          fullPath: currentPath,
+          keyPath: parts[i],
+          isFolder: !isLeaf,
+          isExpanded: false,
+          children: [],
+          level: i,
+          keyId: isLeaf ? (k.id as number) : undefined,
+          description: isLeaf ? k.description ?? undefined : undefined,
+          lastModified: isLeaf ? latestAt : undefined,
+          lastModifiedBy: isLeaf ? latestBy : undefined,
+          sortOrder: isLeaf
+            ? ((k as any).sortOrder ?? 0)
+            : Number.POSITIVE_INFINITY,
+        };
+        map.set(currentPath, node);
+        if (i > 0) {
+          const parentPath = currentPath.substring(
+            0,
+            currentPath.lastIndexOf(".")
+          );
+          const parent = map.get(parentPath);
+          if (parent) parent.children.push(node);
+        }
+      }
+    }
+
+    const roots: SharedTreeNode[] = [];
+    for (const [path, node] of Array.from(map.entries())) {
+      if (!path.includes(".")) roots.push(node);
+    }
+
+    const compute = (nodes: SharedTreeNode[]): {
+      maxAt: Date | undefined;
+      minOrder: number;
+    } => {
+      let maxAt: Date | undefined;
+      let minOrder = Number.POSITIVE_INFINITY;
+      for (const n of nodes) {
+        if (n.isFolder) {
+          const c = compute(n.children);
+          if (c.maxAt) n.lastModified = c.maxAt;
+          n.sortOrder = Number.isFinite(c.minOrder) ? c.minOrder : 0;
+        }
+        if (n.lastModified && (!maxAt || n.lastModified > maxAt)) {
+          maxAt = n.lastModified;
+        }
+        if (n.sortOrder < minOrder) minOrder = n.sortOrder;
+      }
+      nodes.sort((a, b) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.keyPath.localeCompare(b.keyPath);
+      });
+      return { maxAt, minOrder };
+    };
+    compute(roots);
+    return roots;
+  }, [allKeys, searchTerm]);
+
+  const folderLeafCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    const walk = (nodes: SharedTreeNode[]): number => {
+      let n = 0;
+      for (const node of nodes) {
+        if (node.isFolder) {
+          const c = walk(node.children);
+          counts.set(node.fullPath, c);
+          n += c;
+        } else n += 1;
+      }
+      return n;
+    };
+    walk(tree);
+    return counts;
+  }, [tree]);
+
+  const isSearching = searchTerm.trim().length > 0;
+  const flatList = useMemo(() => {
+    const result: SharedTreeNode[] = [];
+    const walk = (nodes: SharedTreeNode[]) => {
+      for (const n of nodes) {
+        result.push(n);
+        if (
+          n.isFolder &&
+          (isSearching || expandedPaths.has(n.fullPath))
+        ) {
+          walk(n.children);
+        }
+      }
+    };
+    walk(tree);
+    return result;
+  }, [tree, expandedPaths, isSearching]);
+
+  const totalLeafKeys = allKeys.length;
+  const totalLocales = locales.length;
+
+  // ── virtualizer ───────────────────────────────────────────────────────────
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: flatList.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
   });
-  const deleteTemplate = trpc.template.delete.useMutation({
+
+  // ── tree controls ─────────────────────────────────────────────────────────
+  const toggleExpand = useCallback((node: SharedTreeNode) => {
+    if (!node.isFolder) return;
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(node.fullPath)) next.delete(node.fullPath);
+      else next.add(node.fullPath);
+      return next;
+    });
+  }, []);
+  const expandAll = useCallback(() => {
+    const all = new Set<string>();
+    const walk = (nodes: SharedTreeNode[]) => {
+      for (const n of nodes) {
+        if (n.isFolder) {
+          all.add(n.fullPath);
+          walk(n.children);
+        }
+      }
+    };
+    walk(tree);
+    setExpandedPaths(all);
+  }, [tree]);
+  const collapseAll = useCallback(() => {
+    setExpandedPaths(new Set());
+  }, []);
+
+  // ── cell helpers ──────────────────────────────────────────────────────────
+  const getValue = useCallback(
+    (keyId: number, localeCode: string) => {
+      const k = `${keyId}:${localeCode}`;
+      if (pendingUpdates.has(k)) return pendingUpdates.get(k)!.value;
+      const row = allKeys.find((x) => x.id === keyId);
+      return row?.translations?.[localeCode]?.value ?? "";
+    },
+    [pendingUpdates, allKeys]
+  );
+  const isPending = useCallback(
+    (keyId: number, localeCode: string) =>
+      pendingUpdates.has(`${keyId}:${localeCode}`),
+    [pendingUpdates]
+  );
+
+  const handleCellChange = useCallback(
+    (keyId: number, localeCode: string, value: string) => {
+      const k = `${keyId}:${localeCode}`;
+      const row = allKeys.find((x) => x.id === keyId);
+      const original = row?.translations?.[localeCode]?.value ?? "";
+      setPendingUpdates((prev) => {
+        const next = new Map(prev);
+        if (value === original) {
+          next.delete(k);
+        } else {
+          next.set(k, { sharedKeyId: keyId, localeCode, value });
+        }
+        return next;
+      });
+    },
+    [allKeys]
+  );
+
+  // ── mutations ─────────────────────────────────────────────────────────────
+  const createKeyMutation = trpc.sharedKey.create.useMutation({
     onSuccess: () => {
-      toast.success("模板已刪除");
-      utils.template.list.invalidate();
-      setSelectedId(null);
+      toast.success("Key 已新增");
+      utils.sharedKey.listWithTranslations.invalidate();
+      utils.sharedKey.listAllFlat.invalidate();
+    },
+    onError: (e) => toast.error(`新增失敗：${e.message}`),
+  });
+  const deleteKeyMutation = trpc.sharedKey.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Key 已刪除");
+      utils.sharedKey.listWithTranslations.invalidate();
+      utils.sharedKey.listAllFlat.invalidate();
     },
     onError: (e) => toast.error(`刪除失敗：${e.message}`),
   });
+  const batchUpsertMutation = trpc.sharedKey.batchUpsertValues.useMutation({
+    onSuccess: () => {
+      setPendingUpdates(new Map());
+      toast.success("已保存");
+      utils.sharedKey.listWithTranslations.invalidate();
+    },
+    onError: (e) => toast.error(`保存失敗：${e.message}`),
+  });
+  const resortMutation = trpc.sharedKey.updateSortOrders.useMutation({
+    onSuccess: () => {
+      toast.success("已依命名重新排序");
+      utils.sharedKey.listWithTranslations.invalidate();
+    },
+    onError: (e) => toast.error(`重排失敗：${e.message}`),
+  });
 
-  // ── New-template dialog state ─────────────────────────────────────────────
-  const [showCreate, setShowCreate] = useState(false);
-  const [tName, setTName] = useState("");
-  const [tDesc, setTDesc] = useState("");
+  const handleSave = useCallback(async () => {
+    if (pendingUpdates.size === 0) return;
+    await batchUpsertMutation.mutateAsync({
+      updates: Array.from(pendingUpdates.values()),
+    });
+  }, [pendingUpdates, batchUpsertMutation]);
 
-  const selectedTpl = useMemo(
-    () => templates?.find((t: any) => t.id === selectedId) ?? null,
-    [templates, selectedId]
-  );
+  const handleResortByName = useCallback(() => {
+    if (allKeys.length === 0) return;
+    const sorted = [...allKeys].sort((a: any, b: any) =>
+      a.keyPath.localeCompare(b.keyPath)
+    );
+    const items = sorted.map((k: any, i: number) => ({
+      id: k.id as number,
+      sortOrder: (i + 1) * 10,
+    }));
+    resortMutation.mutate({ items });
+  }, [allKeys, resortMutation]);
 
+  // ── keyboard shortcuts (⌘S save, ⌘A expand, ⌘Z collapse) ──────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta) return;
+      if (e.key === "s" && hasChanges) {
+        e.preventDefault();
+        handleSave();
+      } else if (e.key === "a") {
+        // Don't hijack normal text-area select-all
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA") {
+          e.preventDefault();
+          expandAll();
+        }
+      } else if (e.key === "z") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA") {
+          e.preventDefault();
+          collapseAll();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasChanges, handleSave, expandAll, collapseAll]);
+
+  // ── import / export ───────────────────────────────────────────────────────
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const triggerImportFilePicker = () => importInputRef.current?.click();
+
+  const handleImportFilesSelected = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const supportedCodes = new Set(allLocales.map((l) => l.code));
+    let totalUpdates: Array<{
+      sharedKeyId: number;
+      localeCode: string;
+      value: string;
+    }> = [];
+    let createdCount = 0;
+    const keysByPath = new Map(allKeys.map((k) => [k.keyPath as string, k]));
+
+    for (const file of Array.from(files)) {
+      const m = file.name.match(/^([a-zA-Z]{2,3}(?:-[A-Za-z]{2,4})?)\.json$/);
+      if (!m) {
+        toast.error(`忽略 ${file.name}：檔名需為 <locale>.json，如 zh-TW.json`);
+        continue;
+      }
+      const code = m[1];
+      if (!supportedCodes.has(code)) {
+        toast.error(`忽略 ${file.name}：未啟用語系 ${code}`);
+        continue;
+      }
+      let parsed: any;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        toast.error(`忽略 ${file.name}：JSON 解析失敗`);
+        continue;
+      }
+      const flat = flattenJson(parsed);
+      for (const [keyPath, value] of Object.entries(flat)) {
+        let row = keysByPath.get(keyPath);
+        if (!row) {
+          // create the missing shared key first
+          try {
+            const { id } = await createKeyMutation.mutateAsync({
+              keyPath,
+            });
+            row = { id, keyPath, translations: {} };
+            keysByPath.set(keyPath, row);
+            createdCount++;
+          } catch {
+            continue;
+          }
+        }
+        totalUpdates.push({
+          sharedKeyId: row.id,
+          localeCode: code,
+          value,
+        });
+      }
+    }
+    e.target.value = ""; // allow re-pick same files
+    if (totalUpdates.length === 0) {
+      toast.error("沒有可匯入的內容");
+      return;
+    }
+    await batchUpsertMutation.mutateAsync({ updates: totalUpdates });
+    toast.success(
+      `匯入完成：新增 ${createdCount} 個 key、寫入 ${totalUpdates.length} 個值`
+    );
+  };
+
+  const handleExportLocale = (code: string) => {
+    const pairs = allKeys.map((k) => ({
+      keyPath: k.keyPath as string,
+      value: (k.translations?.[code]?.value as string) ?? "",
+    }));
+    const obj = buildNestedJson(pairs);
+    downloadFile(`${code}.json`, JSON.stringify(obj, null, 2));
+  };
+
+  // ── derived widths ────────────────────────────────────────────────────────
+  const tableMinWidth = useMemo(() => {
+    const base = 16 + 280 + 12 + 12 + 120 + 12 + 32 + 16;
+    const localesWidth =
+      locales.length === 0
+        ? 0
+        : locales.length * 120 + (locales.length - 1) * 8;
+    return base + localesWidth;
+  }, [locales.length]);
+
+  // ────────────────────────────────────────────────────────────
   return (
     <DashboardLayout>
-      <div className="max-w-[1600px] mx-auto space-y-3">
-        <Card>
-          {/* ── Toolbar ──────────────────────────────────────────────────── */}
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Library className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium mr-1">模板字典</span>
+      <div className="flex flex-col h-[calc(100vh-3rem)] gap-2 w-full">
+        {/* ───────────── Toolbar ───────────── */}
+        <div className="rounded-xl border border-border/60 bg-card shadow-[var(--shadow-card)] overflow-hidden">
+          {/* Row 1 — context: history / view filter / stats */}
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-border/50 flex-wrap">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+              <Library className="h-3.5 w-3.5" />
+              共用字典
+            </div>
+            <div className="h-5 w-px bg-border/70" />
 
-              <Select
-                value={selectedId ? String(selectedId) : ""}
-                onValueChange={(v) => setSelectedId(Number(v))}
-                disabled={!templates || templates.length === 0}
-              >
-                <SelectTrigger className="h-8 w-[220px]">
-                  <SelectValue
-                    placeholder={
-                      tplLoading
-                        ? "載入中…"
-                        : templates && templates.length === 0
-                          ? "尚未建立任何模板"
-                          : "選擇模板…"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {(templates ?? []).map((t: any) => (
-                    <SelectItem key={t.id} value={String(t.id)}>
-                      {t.name}
-                      {!t.isActive && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px] py-0 ml-2"
-                        >
-                          停用
-                        </Badge>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => setHistoryKey({ id: 0, path: "" })}
+              title="查看共用字典的全域編輯歷程"
+            >
+              <History className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">歷程</span>
+            </Button>
 
-              {selectedTpl?.description && (
-                <span
-                  className="text-xs text-muted-foreground truncate max-w-[320px]"
-                  title={selectedTpl.description}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-1.5"
+                  title="勾選要顯示的語系（只影響你看到的畫面）"
+                  disabled={allLocales.length === 0}
                 >
-                  — {selectedTpl.description}
+                  <Eye className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">顯示</span>
+                  {hiddenLocaleCodes.size > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[10px] tabular-nums">
+                      隱 {hiddenLocaleCodes.size}
+                    </span>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-xs">
+                  顯示語系（不寫入 DB）
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {allLocales.map((l) => {
+                  const visible = !hiddenLocaleCodes.has(l.code);
+                  return (
+                    <DropdownMenuItem
+                      key={l.code}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const next = new Set(hiddenLocaleCodes);
+                        if (visible) next.add(l.code);
+                        else next.delete(l.code);
+                        setHiddenLocaleCodes(next);
+                      }}
+                      className="cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        readOnly
+                        className="mr-2 h-3.5 w-3.5 accent-primary"
+                      />
+                      <span className="font-medium flex-1 truncate">
+                        {localeChineseName(l)}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        {l.code}
+                      </span>
+                    </DropdownMenuItem>
+                  );
+                })}
+                {hiddenLocaleCodes.size > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setHiddenLocaleCodes(new Set())}
+                      className="cursor-pointer text-primary focus:text-primary"
+                    >
+                      全部顯示
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Stat pills + sync indicator */}
+            <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+              <StatPill
+                icon={<KeyRound className="h-3 w-3" />}
+                label={isSearching ? "顯示" : "Keys"}
+                value={
+                  isSearching ? `${flatList.filter((n) => !n.isFolder).length} / ${totalLeafKeys}` : totalLeafKeys
+                }
+              />
+              <StatPill
+                icon={<Languages className="h-3 w-3" />}
+                label="語系"
+                value={totalLocales}
+              />
+              {hasChanges ? (
+                <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-medium">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  {pendingUpdates.size} 項待保存
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  已同步
                 </span>
               )}
-
-              <div className="flex-1" />
-
-              {canEdit && (
-                <Button size="sm" onClick={() => setShowCreate(true)}>
-                  <Plus className="h-3.5 w-3.5 mr-1" /> 新增模板
-                </Button>
-              )}
-              {isAdmin && selectedId != null && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (
-                      confirm(
-                        "刪除模板會解除所有專案 key 的引用（保留當前值），確定刪除？"
-                      )
-                    ) {
-                      deleteTemplate.mutate({ id: selectedId });
-                    }
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5 mr-1" /> 刪除模板
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-
-          {/* ── Detail (keys × locales table) ────────────────────────────── */}
-          {selectedId ? (
-            <TemplateDetail
-              templateId={selectedId}
-              locales={locales ?? []}
-              canEdit={canEdit}
-            />
-          ) : (
-            <CardContent className="py-16 text-center text-muted-foreground">
-              <Library className="h-10 w-10 mx-auto mb-3 opacity-30" />
-              <p className="text-sm">
-                {templates && templates.length === 0
-                  ? "尚未建立任何模板"
-                  : "請選擇一個模板"}
-              </p>
-              {canEdit && templates && templates.length === 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => setShowCreate(true)}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> 建立第一個模板
-                </Button>
-              )}
-            </CardContent>
-          )}
-        </Card>
-      </div>
-
-      {/* ── New-template dialog ────────────────────────────────────────── */}
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新增模板字典</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="t-name">名稱</Label>
-              <Input
-                id="t-name"
-                value={tName}
-                onChange={(e) => setTName(e.target.value)}
-                placeholder="例如：common-buttons"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="t-desc">說明（選填）</Label>
-              <Textarea
-                id="t-desc"
-                value={tDesc}
-                onChange={(e) => setTDesc(e.target.value)}
-                placeholder="此模板的用途、適用情境…"
-              />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowCreate(false)}>
-              取消
+
+          {/* Row 2 — search + actions */}
+          <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70 pointer-events-none" />
+              <Input
+                placeholder="搜尋 Key..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9 h-9"
+              />
+            </div>
+
+            <Button
+              onClick={() => setShowAddKey(true)}
+              disabled={!canEdit}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              title={!canEdit ? "需要 editor 以上權限" : undefined}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新增 Key
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={handleResortByName}
+              disabled={!canEdit || allKeys.length === 0 || resortMutation.isPending}
+              title={
+                !canEdit
+                  ? "需要 editor 以上權限"
+                  : "依 keyPath 字母順序重排所有 Key 並寫回資料庫"
+              }
+            >
+              {resortMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ArrowDownAZ className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">依命名重排</span>
+            </Button>
+
+            <Button
+              disabled={!canEdit || allLocales.length === 0}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={triggerImportFilePicker}
+              title={
+                !canEdit
+                  ? "需要 editor 以上權限"
+                  : "匯入 JSON（檔名 = 語系代碼，可一次選多檔）"
+              }
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">匯入</span>
+            </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  disabled={allLocales.length === 0}
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-1.5"
+                  title="匯出 JSON"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">匯出</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="text-xs">單一語系</DropdownMenuLabel>
+                {allLocales.map((l) => (
+                  <DropdownMenuItem
+                    key={l.code}
+                    onClick={() => handleExportLocale(l.code)}
+                    className="cursor-pointer"
+                  >
+                    <LocaleFlag code={l.code} size="sm" className="mr-2" />
+                    <span className="font-medium">{localeChineseName(l)}</span>
+                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                      {l.code}.json
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              multiple
+              onChange={handleImportFilesSelected}
+              className="hidden"
+            />
+
+            <div className="h-5 w-px bg-border/70 mx-0.5" />
+
+            <Button
+              onClick={expandAll}
+              disabled={isLoading}
+              variant="ghost"
+              size="sm"
+              className="h-9 gap-1.5"
+              title="展開全部 (⌘A)"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">展開</span>
             </Button>
             <Button
-              onClick={() => {
-                if (!tName.trim()) {
-                  toast.error("名稱不可為空");
-                  return;
-                }
-                createTemplate.mutate({
-                  name: tName.trim(),
-                  description: tDesc.trim() || undefined,
-                });
-              }}
-              disabled={createTemplate.isPending}
+              onClick={collapseAll}
+              disabled={expandedPaths.size === 0}
+              variant="ghost"
+              size="sm"
+              className="h-9 gap-1.5"
+              title="收起全部 (⌘Z)"
             >
-              建立
+              <Minimize2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">收起</span>
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
+            <Button
+              onClick={handleSave}
+              disabled={!hasChanges || !canEdit || batchUpsertMutation.isPending}
+              size="sm"
+              className={`h-9 gap-1.5 min-w-[110px] transition-all ${
+                hasChanges ? "shadow-[var(--shadow-glow)]" : ""
+              }`}
+              title={!canEdit ? "需要 editor 以上權限" : "保存 (⌘S)"}
+            >
+              {batchUpsertMutation.isPending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  保存中…
+                </>
+              ) : (
+                <>
+                  <Save className="h-3.5 w-3.5" />
+                  保存{hasChanges ? ` (${pendingUpdates.size})` : ""}
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {/* ───────────── Main panel ───────────── */}
+        {isLoading ? (
+          <div className="flex-1 rounded-xl border border-border/60 bg-card overflow-hidden">
+            <div className="px-4 py-3 border-b border-border/50 bg-muted/40">
+              <Skeleton className="h-4 w-32" />
+            </div>
+            <div className="space-y-1 p-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 py-2">
+                  <Skeleton className="h-4 w-4 rounded" />
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-8 flex-1" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : flatList.length === 0 ? (
+          <div className="flex-1 rounded-xl border border-dashed border-border bg-card/50 flex items-center justify-center p-12">
+            <div className="text-center max-w-sm">
+              <div
+                className="mx-auto h-14 w-14 rounded-2xl flex items-center justify-center mb-4"
+                style={{ background: "var(--gradient-primary)" }}
+              >
+                <FolderTree className="h-7 w-7 text-white" strokeWidth={2} />
+              </div>
+              <h3 className="text-base font-semibold tracking-tight">
+                {searchTerm ? "找不到符合的 Key" : "目前沒有任何共用 Key"}
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
+                {searchTerm
+                  ? `「${searchTerm}」沒有匹配的結果，試試其他關鍵字`
+                  : "點擊「新增 Key」開始建立第一個共用條目"}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 rounded-xl border border-border/60 bg-card overflow-hidden flex flex-col shadow-[var(--shadow-card)]">
+            <div ref={parentRef} className="flex-1 overflow-auto scrollbar-elegant">
+              <div style={{ minWidth: `${tableMinWidth}px` }}>
+                {/* Header */}
+                <div className="sticky top-0 z-10 border-b border-border/60">
+                  <div className="flex items-stretch text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <div
+                      className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} flex items-center pl-4 pr-3 py-2.5 bg-muted/95 backdrop-blur-sm`}
+                    >
+                      Key
+                    </div>
+                    <div
+                      className={`${LOCALES_COL} flex gap-2 items-center px-3 py-2 bg-muted/95 backdrop-blur-sm`}
+                    >
+                      {locales.map((locale) => (
+                        <div
+                          key={locale.code}
+                          className="flex-1 min-w-[120px] flex items-center gap-2"
+                          title={`${localeChineseName(locale)} (${locale.code})`}
+                        >
+                          <LocaleFlag code={locale.code} size="md" />
+                          <div className="flex flex-col leading-tight min-w-0">
+                            <span className="normal-case truncate text-[13px] font-medium text-foreground">
+                              {localeChineseName(locale)}
+                            </span>
+                            <span className="font-mono text-[10px] text-muted-foreground/80 truncate">
+                              {locale.code}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} items-center justify-end pl-3 pr-2 py-2.5 bg-muted/95 backdrop-blur-sm`}
+                    >
+                      最後修改
+                    </div>
+                    <div
+                      className={`shrink-0 w-8 ${STICKY_KEBAB} bg-muted/95 backdrop-blur-sm`}
+                      aria-hidden
+                    />
+                  </div>
+                </div>
+
+                {/* Virtualized rows */}
+                <div
+                  style={{
+                    height: `${virtualizer.getTotalSize()}px`,
+                    width: "100%",
+                    position: "relative",
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((vi) => {
+                    const node = flatList[vi.index];
+                    if (!node) return null;
+                    return (
+                      <div
+                        key={vi.key}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vi.size}px`,
+                          transform: `translateY(${vi.start}px)`,
+                        }}
+                      >
+                        {node.isFolder ? (
+                          <FolderRow
+                            node={node}
+                            isExpanded={expandedPaths.has(node.fullPath)}
+                            onToggle={() => toggleExpand(node)}
+                            leafCount={folderLeafCount.get(node.fullPath) ?? 0}
+                            canEdit={canEdit}
+                            onRequestDelete={() => {
+                              const ids: number[] = [];
+                              const collect = (nodes: SharedTreeNode[]) => {
+                                for (const n of nodes) {
+                                  if (n.isFolder) collect(n.children);
+                                  else if (n.keyId) ids.push(n.keyId);
+                                }
+                              };
+                              collect(node.children);
+                              if (ids.length === 0) return;
+                              setDeletingKey({
+                                ids,
+                                path: node.fullPath,
+                                isFolder: true,
+                              });
+                            }}
+                          />
+                        ) : (
+                          <LeafRow
+                            node={node}
+                            locales={locales}
+                            getValue={getValue}
+                            isPending={isPending}
+                            canEdit={canEdit}
+                            onChange={handleCellChange}
+                            onViewHistory={(keyId) =>
+                              setHistoryKey({ id: keyId, path: node.fullPath })
+                            }
+                            onRequestDelete={(keyId, path) =>
+                              setDeletingKey({ ids: [keyId], path })
+                            }
+                            userIdToName={userIdToName}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Add key dialog */}
+      <AddKeyDialog
+        open={showAddKey}
+        onClose={() => setShowAddKey(false)}
+        onCreate={async (keyPath, description) => {
+          await createKeyMutation.mutateAsync({
+            keyPath,
+            description: description || undefined,
+          });
+          setShowAddKey(false);
+        }}
+        existingKeyPaths={allKeys.map((k) => k.keyPath as string)}
+        pending={createKeyMutation.isPending}
+      />
+
+      {/* History modal — keyId=0 means "all shared keys" (global) */}
+      <KeyHistoryModal
+        open={historyKey !== null}
+        keyId={historyKey?.id ?? null}
+        keyPath={historyKey?.path}
+        userIdToName={userIdToName}
+        onClose={() => setHistoryKey(null)}
+        source="shared"
+      />
+
+      {/* Delete confirmation */}
+      <AlertDialog
+        open={deletingKey !== null}
+        onOpenChange={(o) => !o && setDeletingKey(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deletingKey?.isFolder
+                ? `刪除整個群組「${deletingKey.path}」？`
+                : `刪除 key「${deletingKey?.path}」？`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingKey?.isFolder
+                ? `將會刪除 ${deletingKey.ids.length} 個 key。`
+                : "刪除後，引用此 key 的專案 key 會落地當前值並解除引用。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!deletingKey) return;
+                for (const id of deletingKey.ids) {
+                  await deleteKeyMutation.mutateAsync({ id });
+                }
+                setDeletingKey(null);
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              確認刪除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// 模板細節：keys + 多語系值表格（單一 Card 內）
-// ────────────────────────────────────────────────────────────────────────────
-function TemplateDetail({
-  templateId,
-  locales,
-  canEdit,
+// ────────────────────────────────────────────────────────────
+// StatPill
+// ────────────────────────────────────────────────────────────
+function StatPill({
+  icon,
+  label,
+  value,
 }: {
-  templateId: number;
-  locales: Array<{ id: number; code: string; name: string; nativeName: string }>;
-  canEdit: boolean;
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
 }) {
-  const utils = trpc.useUtils();
-  const { data: keys, isLoading } = trpc.template.listKeysWithTranslations.useQuery({
-    templateId,
-  });
-
-  const [search, setSearch] = useState("");
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return keys ?? [];
-    return (keys ?? []).filter(
-      (k: any) =>
-        k.keyPath.toLowerCase().includes(q) ||
-        (k.description ?? "").toLowerCase().includes(q)
-    );
-  }, [keys, search]);
-
-  const createKey = trpc.template.createKey.useMutation({
-    onSuccess: () => {
-      toast.success("Key 已新增");
-      utils.template.listKeysWithTranslations.invalidate({ templateId });
-    },
-    onError: (e) => toast.error(`新增失敗：${e.message}`),
-  });
-  const deleteKey = trpc.template.deleteKey.useMutation({
-    onSuccess: () => {
-      toast.success("Key 已刪除（引用此 key 的專案 key 已落地當前值）");
-      utils.template.listKeysWithTranslations.invalidate({ templateId });
-    },
-  });
-  const upsertValue = trpc.template.upsertValue.useMutation({
-    onSuccess: () => {
-      utils.template.listKeysWithTranslations.invalidate({ templateId });
-    },
-    onError: (e) => toast.error(`儲存失敗：${e.message}`),
-  });
-
-  const [showAddKey, setShowAddKey] = useState(false);
-  const [newKeyPath, setNewKeyPath] = useState("");
-  const [newKeyDesc, setNewKeyDesc] = useState("");
-
   return (
-    <>
-      <CardContent className="p-0">
-        {/* Sub-toolbar：搜尋 + 新增 Key */}
-        <div className="px-4 pt-3 pb-3 flex items-center gap-2 border-b">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜尋 key 或說明…"
-              className="pl-7 h-8 text-xs"
-            />
-          </div>
-          <div className="flex-1" />
-          {canEdit && (
-            <Button size="sm" onClick={() => setShowAddKey(true)}>
-              <Plus className="h-3.5 w-3.5 mr-1" /> 新增 Key
-            </Button>
-          )}
-        </div>
-
-        <div className="overflow-x-auto">
-          {isLoading ? (
-            <p className="text-xs text-muted-foreground p-6">載入中…</p>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <KeyRound className="h-8 w-8 mx-auto mb-2 opacity-30" />
-              <p className="text-xs">
-                {keys && keys.length === 0
-                  ? "此模板尚未有任何 key"
-                  : "沒有符合的 key"}
-              </p>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs">
-                <tr>
-                  <th className="text-left px-3 py-2 w-[260px] sticky left-0 bg-muted/40">
-                    Key
-                  </th>
-                  {locales.map((l) => (
-                    <th key={l.code} className="text-left px-3 py-2 min-w-[180px]">
-                      <div className="flex items-center gap-1.5">
-                        <LocaleFlag code={l.code} size="sm" />
-                        <span className="font-medium">{l.name}</span>
-                        <code className="text-[10px] text-muted-foreground">
-                          {l.code}
-                        </code>
-                      </div>
-                    </th>
-                  ))}
-                  <th className="w-10" />
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((k: any) => (
-                  <tr
-                    key={k.id}
-                    className="border-t border-border/40 hover:bg-muted/20"
-                  >
-                    <td className="px-3 py-2 sticky left-0 bg-background">
-                      <div className="flex items-center gap-1.5">
-                        <KeyRound className="h-3 w-3 opacity-50" />
-                        <code className="text-xs">{k.keyPath}</code>
-                      </div>
-                      {k.description && (
-                        <p className="text-[11px] text-muted-foreground mt-1 line-clamp-1">
-                          {k.description}
-                        </p>
-                      )}
-                    </td>
-                    {locales.map((l) => (
-                      <td key={l.code} className="px-2 py-1">
-                        <TemplateValueCell
-                          initial={k.translations[l.code]?.value ?? ""}
-                          disabled={!canEdit}
-                          onCommit={(v) =>
-                            upsertValue.mutate({
-                              templateKeyId: k.id,
-                              localeCode: l.code,
-                              value: v,
-                            })
-                          }
-                        />
-                      </td>
-                    ))}
-                    <td className="px-2 py-1">
-                      {canEdit && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `刪除 key「${k.keyPath}」？引用此 key 的專案 key 會落地當前值並解除引用。`
-                              )
-                            ) {
-                              deleteKey.mutate({ id: k.id });
-                            }
-                          }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </CardContent>
-
-      {/* New key dialog */}
-      <Dialog open={showAddKey} onOpenChange={setShowAddKey}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新增模板 Key</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="k-path">Key Path</Label>
-              <Input
-                id="k-path"
-                value={newKeyPath}
-                onChange={(e) => setNewKeyPath(e.target.value)}
-                placeholder="例如：common.button.confirm"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="k-desc">說明（選填）</Label>
-              <Textarea
-                id="k-desc"
-                value={newKeyDesc}
-                onChange={(e) => setNewKeyDesc(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowAddKey(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={() => {
-                if (!newKeyPath.trim()) {
-                  toast.error("Key path 不可為空");
-                  return;
-                }
-                createKey.mutate(
-                  {
-                    templateId,
-                    keyPath: newKeyPath.trim(),
-                    description: newKeyDesc.trim() || undefined,
-                  },
-                  {
-                    onSuccess: () => {
-                      setShowAddKey(false);
-                      setNewKeyPath("");
-                      setNewKeyDesc("");
-                    },
-                  }
-                );
-              }}
-              disabled={createKey.isPending}
-            >
-              建立
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-muted text-foreground border border-border/60 text-xs">
+      <span className="text-muted-foreground">{icon}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </span>
   );
 }
 
-/**
- * Inline-edit cell with onBlur commit. Mirrors the pattern in
- * TranslationEditorOptimized so behavior feels consistent.
- */
-function TemplateValueCell({
-  initial,
-  disabled,
-  onCommit,
+// ────────────────────────────────────────────────────────────
+// FolderRow — same shape as TranslationEditor
+// ────────────────────────────────────────────────────────────
+function FolderRow({
+  node,
+  isExpanded,
+  onToggle,
+  leafCount,
+  canEdit,
+  onRequestDelete,
 }: {
-  initial: string;
-  disabled?: boolean;
-  onCommit: (value: string) => void;
+  node: SharedTreeNode;
+  isExpanded: boolean;
+  onToggle: () => void;
+  leafCount: number;
+  canEdit: boolean;
+  onRequestDelete: () => void;
 }) {
-  const [val, setVal] = useState(initial);
-  useEffect(() => setVal(initial), [initial]);
+  const cellBg = "bg-muted group-hover/folder:bg-secondary transition-colors";
   return (
-    <Input
-      value={val}
-      disabled={disabled}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={() => {
-        if (val !== initial) onCommit(val);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setVal(initial);
-          (e.target as HTMLInputElement).blur();
+    <button
+      type="button"
+      onClick={onToggle}
+      className="group/folder w-full h-full flex items-stretch border-b border-border/60 text-left"
+    >
+      <div
+        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative flex items-center gap-2 pl-4 pr-3`}
+      >
+        <span
+          aria-hidden
+          className={`absolute left-0 top-0 bottom-0 w-[3px] ${
+            isExpanded ? "bg-primary" : "bg-primary/40"
+          }`}
+        />
+        {node.level > 0 && (
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{ width: `${node.level * 16}px` }}
+          />
+        )}
+        <span className="shrink-0 w-5 flex items-center justify-center text-foreground/70 group-hover/folder:text-foreground">
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </span>
+        <FolderTree
+          className={`h-4 w-4 shrink-0 ${
+            isExpanded ? "text-primary" : "text-foreground/70"
+          }`}
+        />
+        <span className="font-mono text-sm font-semibold tracking-tight truncate text-foreground">
+          {node.keyPath}
+        </span>
+      </div>
+      <div className={`${LOCALES_COL} flex items-center px-3 ${cellBg}`}>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-card border border-border text-[11px] text-muted-foreground tabular-nums shadow-sm">
+          <KeyRound className="h-2.5 w-2.5" />
+          {leafCount}
+        </span>
+      </div>
+      <div
+        className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} ${cellBg} items-center justify-end pl-3 pr-2 text-[11px] uppercase tracking-wider text-muted-foreground/80 font-semibold`}
+      >
+        群組
+      </div>
+      <div
+        className={`shrink-0 w-8 ${STICKY_KEBAB} ${cellBg} flex items-center justify-end pr-1`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {canEdit && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-background/60 transition-all opacity-0 group-hover/folder:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                aria-label="更多動作"
+                title="更多動作"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={onRequestDelete}
+                className="cursor-pointer text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                刪除整個群組
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// LeafRow — sticky key + locale inputs + meta + kebab, mirrors TranslationEditor
+// ────────────────────────────────────────────────────────────
+function LeafRow({
+  node,
+  locales,
+  getValue,
+  isPending,
+  canEdit,
+  onChange,
+  onViewHistory,
+  onRequestDelete,
+  userIdToName,
+}: {
+  node: SharedTreeNode;
+  locales: any[];
+  getValue: (keyId: number, code: string) => string;
+  isPending: (keyId: number, code: string) => boolean;
+  canEdit: boolean;
+  onChange: (keyId: number, code: string, value: string) => void;
+  onViewHistory: (keyId: number) => void;
+  onRequestDelete: (keyId: number, keyPath: string) => void;
+  userIdToName: Map<number, string>;
+}) {
+  if (!node.keyId) return null;
+
+  const lastModified = node.lastModified ? new Date(node.lastModified) : null;
+  const lastModifiedStr = lastModified ? formatRelativeOrDate(lastModified) : null;
+  const lastModifiedFull = lastModified
+    ? lastModified.toLocaleString("zh-TW", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+  const editorName =
+    node.lastModifiedBy != null
+      ? userIdToName.get(node.lastModifiedBy) || `#${node.lastModifiedBy}`
+      : null;
+
+  const cellBg = "bg-card group-hover/row:bg-muted/70 transition-colors";
+  return (
+    <div className="group/row w-full h-full flex items-stretch border-b border-border/60 relative">
+      <div
+        className={`${KEY_COL} ${STICKY_LEFT} ${STICKY_LEFT_SHADOW} ${cellBg} relative pl-4 pr-3 text-left min-w-0 flex items-center gap-2`}
+      >
+        <span
+          aria-hidden
+          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-r-full bg-primary opacity-0 group-hover/row:opacity-60 transition-opacity"
+        />
+        {node.level > 0 && (
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{ width: `${node.level * 16}px` }}
+          />
+        )}
+        <span aria-hidden className="shrink-0 w-5" />
+        <div className="flex flex-col justify-center min-w-0 flex-1">
+          <span className="font-mono text-sm font-medium truncate flex items-center gap-1.5">
+            <span className="truncate">{node.keyPath}</span>
+          </span>
+          {node.description && (
+            <span className="text-[11px] text-muted-foreground truncate mt-0.5">
+              {node.description}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className={`${LOCALES_COL} flex gap-2 items-center px-3 ${cellBg}`}>
+        {locales.map((locale) => {
+          const val = getValue(node.keyId!, locale.code);
+          const pending = isPending(node.keyId!, locale.code);
+          const filled = !!val.trim();
+          return (
+            <div
+              key={locale.code}
+              className="flex-1 min-w-[120px] relative"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="text"
+                placeholder={localeChineseName(locale)}
+                value={val}
+                readOnly={!canEdit}
+                onChange={(e) => onChange(node.keyId!, locale.code, e.target.value)}
+                className={`peer w-full h-9 pl-2.5 pr-7 text-sm rounded-md bg-input border transition-all
+                  focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/25
+                  ${!canEdit ? "cursor-default opacity-90" : ""}
+                  ${pending
+                    ? "border-amber-500/60 bg-amber-500/5"
+                    : filled
+                      ? "border-border"
+                      : "border-border/70 text-muted-foreground"}`}
+                title={
+                  !canEdit
+                    ? `唯讀 — 需要 editor 以上權限`
+                    : `${locale.name} (${locale.code})`
+                }
+              />
+              <span
+                aria-hidden
+                className={`absolute right-2.5 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full transition-all peer-focus:opacity-0 ${
+                  pending
+                    ? "bg-amber-500 animate-pulse"
+                    : filled
+                      ? "bg-emerald-500"
+                      : "bg-border"
+                }`}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <div
+        className={`${META_COL} ${STICKY_META} ${STICKY_RIGHT_SHADOW} ${cellBg} flex-col items-end justify-center text-right gap-0.5 pl-3 pr-2`}
+        title={
+          editorName && lastModifiedFull
+            ? `${editorName} · ${lastModifiedFull}`
+            : editorName
+              ? editorName
+              : lastModifiedFull ?? undefined
         }
-      }}
-      className="h-8 text-xs"
-      placeholder={disabled ? "—" : "輸入翻譯…"}
-    />
+      >
+        {editorName ? (
+          <span className="text-xs font-medium text-foreground/90 truncate max-w-full leading-tight">
+            {editorName}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground/60 italic">未編輯</span>
+        )}
+        <span className="text-[10px] tabular-nums text-muted-foreground/80 leading-tight">
+          {lastModifiedStr ?? "—"}
+        </span>
+      </div>
+
+      <div
+        className={`shrink-0 w-8 ${STICKY_KEBAB} ${cellBg} flex items-center justify-end`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              aria-label="更多動作"
+              title="更多動作"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem
+              onClick={() => onViewHistory(node.keyId!)}
+              className="cursor-pointer"
+            >
+              <History className="h-4 w-4 mr-2" />
+              查看編輯歷程
+            </DropdownMenuItem>
+            {canEdit && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onRequestDelete(node.keyId!, node.fullPath)}
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  刪除 Key
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// AddKeyDialog
+// ────────────────────────────────────────────────────────────
+function AddKeyDialog({
+  open,
+  onClose,
+  onCreate,
+  existingKeyPaths,
+  pending,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (keyPath: string, description: string) => Promise<void> | void;
+  existingKeyPaths: string[];
+  pending?: boolean;
+}) {
+  const [keyPath, setKeyPath] = useState("");
+  const [desc, setDesc] = useState("");
+  useEffect(() => {
+    if (open) {
+      setKeyPath("");
+      setDesc("");
+    }
+  }, [open]);
+  const dup = keyPath.trim().length > 0 && existingKeyPaths.includes(keyPath.trim());
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>新增共用 Key</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="k-path">Key Path</Label>
+            <Input
+              id="k-path"
+              value={keyPath}
+              onChange={(e) => setKeyPath(e.target.value)}
+              placeholder="例如：common.button.confirm"
+              autoFocus
+            />
+            {dup && (
+              <p className="text-xs text-destructive">
+                此 keyPath 已存在於共用字典
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="k-desc">說明（選填）</Label>
+            <Textarea
+              id="k-desc"
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            disabled={pending || dup || !keyPath.trim()}
+            onClick={() => onCreate(keyPath.trim(), desc.trim())}
+          >
+            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+            建立
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

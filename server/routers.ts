@@ -47,23 +47,21 @@ import {
   createExport,
   getDb,
   getTranslationsByKeyId,
-  // Template helpers
-  getAllTemplates,
-  getTemplateById,
-  createTemplate,
-  updateTemplate,
-  deleteTemplate,
-  getTemplateKeys,
-  getTemplateKeysByIds,
-  createTemplateKey,
-  updateTemplateKey,
-  deleteTemplateKey,
-  getTemplateTranslationsByKeyIds,
-  upsertTemplateTranslation,
-  linkProjectKeyToTemplate,
-  unlinkProjectKeyFromTemplate,
-  applyTemplateToProject,
+  // Shared key helpers
+  getSharedKeys,
+  getSharedKeysByIds,
+  createSharedKey,
+  updateSharedKey,
+  updateSharedKeySortOrders,
+  deleteSharedKey,
+  getSharedTranslationsByKeyIds,
+  upsertSharedTranslation,
+  linkProjectKeyToShared,
+  unlinkProjectKeyFromShared,
+  applySharedKeysToProject,
   getResolvedTranslationsForProjectKeys,
+  getSharedTranslationHistory,
+  getSharedTranslationHistoryCount,
 } from "./db";
 import type { User } from "../drizzle/schema";
 
@@ -262,12 +260,12 @@ const translationKeyRouter = router({
         projectId: input.projectId,
         search: input.search,
       });
-      // Template-aware translation resolution: keys with `templateKeyId` set
-      // pull their values from `template_translations`, otherwise from the
-      // project's own `translations` rows. Each cell carries `fromTemplate`
-      // so the editor can show the 「模板」 badge.
+      // Shared-key-aware translation resolution: keys with `sharedKeyId` set
+      // pull their values from `shared_translations`, otherwise from the
+      // project's own `translations` rows. Each cell carries `fromShared`
+      // so the editor can show the 「共用」 badge.
       const allTranslations = await getResolvedTranslationsForProjectKeys(
-        keys.map((k: any) => ({ id: k.id, templateKeyId: k.templateKeyId ?? null }))
+        keys.map((k: any) => ({ id: k.id, sharedKeyId: k.sharedKeyId ?? null }))
       );
 
       // 收集該版本中有異動的 (keyId, localeCode) — 用於亮顯異動 cell
@@ -298,8 +296,8 @@ const translationKeyRouter = router({
         updatedBy?: number | null;
         /** True iff this (key, locale) was modified in the selected version. */
         changedInVersion?: boolean;
-        /** True iff the value came from a referenced template (Apifox $ref). */
-        fromTemplate?: boolean;
+        /** True iff the value came from a referenced shared key (Apifox $ref). */
+        fromShared?: boolean;
       };
 
       const result = filteredKeys.map((key) => {
@@ -315,7 +313,7 @@ const translationKeyRouter = router({
             changedInVersion: input.versionId
               ? changedInVersion.has(`${key.id}:${t.localeCode}`)
               : undefined,
-            fromTemplate: (t as any).fromTemplate === true,
+            fromShared: (t as any).fromShared === true,
           };
         }
         return { ...key, translations: localeValues };
@@ -450,21 +448,21 @@ const translationKeyRouter = router({
 
 // ─── Translation router ───────────────────────────────────────────────────────
 //
-// Template-aware write path: if the project key has `templateKeyId` set, the
-// edit is rerouted to upsertTemplateTranslation — the project's own
+// Shared-key-aware write path: if the project key has `sharedKeyId` set, the
+// edit is rerouted to upsertSharedTranslation — the project's own
 // `translations` row would be ignored by resolution anyway, and the user's
-// intent is "edit the value as displayed", which is the template's value.
-async function getTemplateKeyIdMap(keyIds: number[]): Promise<Map<number, number | null>> {
+// intent is "edit the value as displayed", which is the shared key's value.
+async function getSharedKeyIdMap(keyIds: number[]): Promise<Map<number, number | null>> {
   const out = new Map<number, number | null>();
   if (keyIds.length === 0) return out;
   const db = await getDb();
   if (!db) return out;
   const { translationKeys } = await import("../drizzle/schema");
   const rows = await db
-    .select({ id: translationKeys.id, templateKeyId: translationKeys.templateKeyId })
+    .select({ id: translationKeys.id, sharedKeyId: translationKeys.sharedKeyId })
     .from(translationKeys)
     .where(inArray(translationKeys.id, keyIds));
-  for (const r of rows as any[]) out.set(r.id, r.templateKeyId ?? null);
+  for (const r of rows as any[]) out.set(r.id, r.sharedKeyId ?? null);
   return out;
 }
 
@@ -478,11 +476,11 @@ const translationRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const tMap = await getTemplateKeyIdMap([input.keyId]);
-      const tkid = tMap.get(input.keyId) ?? null;
-      if (tkid) {
-        await upsertTemplateTranslation({
-          templateKeyId: tkid,
+      const sMap = await getSharedKeyIdMap([input.keyId]);
+      const skid = sMap.get(input.keyId) ?? null;
+      if (skid) {
+        await upsertSharedTranslation({
+          sharedKeyId: skid,
           localeCode: input.localeCode,
           value: input.value,
           isTranslated: input.value.length > 0,
@@ -503,7 +501,7 @@ const translationRouter = router({
         changedBy: ctx.user.id,
         action: "update",
       });
-      return { success: true, viaTemplate: !!tkid };
+      return { success: true, viaShared: !!skid };
     }),
   batchUpdate: editorProcedure
     .input(
@@ -519,14 +517,14 @@ const translationRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const tMap = await getTemplateKeyIdMap(
+      const sMap = await getSharedKeyIdMap(
         Array.from(new Set(input.updates.map((u) => u.keyId)))
       );
       for (const update of input.updates) {
-        const tkid = tMap.get(update.keyId) ?? null;
-        if (tkid) {
-          await upsertTemplateTranslation({
-            templateKeyId: tkid,
+        const skid = sMap.get(update.keyId) ?? null;
+        if (skid) {
+          await upsertSharedTranslation({
+            sharedKeyId: skid,
             localeCode: update.localeCode,
             value: update.value,
             isTranslated: update.value.length > 0,
@@ -813,92 +811,50 @@ const userRouter = router({
     }),
 });
 
-// ─── Template (字典/模型) router ──────────────────────────────────────────────
+// ─── Shared Key (共用字典) router ─────────────────────────────────────────────
 //
-// 對應 Apifox 的 schema/model：跨專案共用的詞條集。模板上的修改會即時反映到
-// 所有 reference 過它的 project key (因為 listWithTranslations 會以
-// templateKeyId resolve 出值)。專案 key 也可選擇 `mode: "copy"` 一次性複製
-// 模板當前值，後續獨立維護。
-const templateRouter = router({
-  list: protectedProcedure.query(() => getAllTemplates()),
-  get: protectedProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(({ input }) => getTemplateById(input.id)),
-  create: editorProcedure
+// 跨專案共用的 i18n 詞條池（平面字典）。對 shared key 的編輯會即時反映到所有
+// reference 過它的 project key (因為 listWithTranslations 會以 sharedKeyId
+// resolve 出值)。專案 key 也可選擇 `mode: "copy"` 一次性複製當前值，後續獨立
+// 維護。
+const sharedKeyRouter = router({
+  // ── Shared keys ───────────────────────────────────────────────────────────
+  list: protectedProcedure
     .input(
-      z.object({
-        name: z.string().min(1).max(128),
-        description: z.string().optional(),
-      })
+      z
+        .object({
+          search: z.string().optional(),
+        })
+        .optional()
     )
-    .mutation(async ({ input, ctx }) => {
-      const id = await createTemplate({ ...input, createdBy: ctx.user.id });
-      return { id };
-    }),
-  update: editorProcedure
-    .input(
-      z.object({
-        id: z.number().int(),
-        name: z.string().min(1).max(128).optional(),
-        description: z.string().optional(),
-        isActive: z.boolean().optional(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const { id, ...data } = input;
-      await updateTemplate(id, data);
-      return { success: true };
-    }),
-  delete: adminProcedure
-    .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      await deleteTemplate(input.id);
-      return { success: true };
-    }),
-
-  // ── Template keys ─────────────────────────────────────────────────────────
-  listKeys: protectedProcedure
-    .input(
-      z.object({
-        templateId: z.number().int(),
-        search: z.string().optional(),
-      })
-    )
-    .query(({ input }) => getTemplateKeys({ templateId: input.templateId, search: input.search })),
+    .query(({ input }) => getSharedKeys({ search: input?.search })),
 
   /**
-   * Flat 列出所有模板的 keys（含 templateId / templateName），給專案編輯器
-   * 的「引用模板」popover 一次抓完用。資料量通常很小（<幾百筆），不需要分頁。
+   * Flat 列出所有共用 keys，給專案編輯器的「引用共用 key」popover 一次抓完用。
+   * 資料量通常很小（<幾百筆），不需要分頁。
    */
-  listAllKeysFlat: protectedProcedure.query(async () => {
-    const tpls = await getAllTemplates();
-    const allKeys = await getTemplateKeys({});
-    const tMap = new Map<number, { id: number; name: string }>();
-    for (const t of tpls as any[]) tMap.set(t.id, { id: t.id, name: t.name });
-    return (allKeys as any[]).map((k) => ({
+  listAllFlat: protectedProcedure.query(async () => {
+    const all = await getSharedKeys({});
+    return (all as any[]).map((k) => ({
       keyId: k.id,
       keyPath: k.keyPath,
       description: k.description ?? null,
-      templateId: k.templateId,
-      templateName: tMap.get(k.templateId)?.name ?? "?",
     }));
   }),
 
-  /** 模板的 key + 多語系值，整理成跟 listWithTranslations 一致的形狀。 */
-  listKeysWithTranslations: protectedProcedure
+  /** 共用 key + 多語系值，整理成跟 translationKey.listWithTranslations 一致的形狀。 */
+  listWithTranslations: protectedProcedure
     .input(
-      z.object({
-        templateId: z.number().int(),
-        search: z.string().optional(),
-      })
+      z
+        .object({
+          search: z.string().optional(),
+        })
+        .optional()
     )
     .query(async ({ input }) => {
-      const keys = await getTemplateKeys({
-        templateId: input.templateId,
-        search: input.search,
-      });
+      const keys = await getSharedKeys({ search: input?.search });
       const keyIds = (keys as any[]).map((k) => k.id as number);
-      const trs = await getTemplateTranslationsByKeyIds(keyIds);
+      const trs = await getSharedTranslationsByKeyIds(keyIds);
       type Cell = {
         value: string | null;
         isTranslated: boolean;
@@ -907,7 +863,7 @@ const templateRouter = router({
       };
       return (keys as any[]).map((k) => {
         const cells: Record<string, Cell> = {};
-        for (const t of (trs as any[]).filter((x) => x.templateKeyId === k.id)) {
+        for (const t of (trs as any[]).filter((x) => x.sharedKeyId === k.id)) {
           cells[t.localeCode] = {
             value: t.value,
             isTranslated: !!t.isTranslated,
@@ -919,26 +875,25 @@ const templateRouter = router({
       });
     }),
 
-  createKey: editorProcedure
+  create: editorProcedure
     .input(
       z.object({
-        templateId: z.number().int(),
         keyPath: z.string().min(1).max(512),
         description: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const existing = await getTemplateKeys({ templateId: input.templateId });
+      const existing = await getSharedKeys({});
       if ((existing as any[]).some((k: any) => k.keyPath === input.keyPath)) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `模板 key「${input.keyPath}」已存在`,
+          message: `共用 key「${input.keyPath}」已存在`,
         });
       }
-      const id = await createTemplateKey({ ...input, createdBy: ctx.user.id });
+      const id = await createSharedKey({ ...input, createdBy: ctx.user.id });
       return { id };
     }),
-  updateKey: editorProcedure
+  update: editorProcedure
     .input(
       z.object({
         id: z.number().int(),
@@ -949,41 +904,53 @@ const templateRouter = router({
     )
     .mutation(async ({ input }) => {
       const { id, ...data } = input;
-      await updateTemplateKey(id, data);
+      await updateSharedKey(id, data);
       return { success: true };
     }),
-  deleteKey: editorProcedure
+  delete: editorProcedure
     .input(z.object({ id: z.number().int() }))
-    .mutation(async ({ input }) => {
-      await deleteTemplateKey(input.id);
+    .mutation(async ({ input, ctx }) => {
+      await deleteSharedKey(input.id, ctx.user.id);
       return { success: true };
+    }),
+  updateSortOrders: editorProcedure
+    .input(
+      z.object({
+        items: z.array(
+          z.object({ id: z.number().int(), sortOrder: z.number().int() })
+        ),
+      })
+    )
+    .mutation(async ({ input }) => {
+      await updateSharedKeySortOrders(input.items);
+      return { success: true, updated: input.items.length };
     }),
 
-  // ── Template translation values ──────────────────────────────────────────
-  /** Update a single value on a template key — propagates to all references. */
+  // ── Shared translation values ─────────────────────────────────────────────
+  /** Update a single value on a shared key — propagates to all references. */
   upsertValue: editorProcedure
     .input(
       z.object({
-        templateKeyId: z.number().int(),
+        sharedKeyId: z.number().int(),
         localeCode: z.string().min(2).max(16),
         value: z.string(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await upsertTemplateTranslation({
+      await upsertSharedTranslation({
         ...input,
         isTranslated: input.value.length > 0,
         updatedBy: ctx.user.id,
       });
       return { success: true };
     }),
-  /** Batch upsert template values (mirrors translation.batchUpdate). */
+  /** Batch upsert shared values (mirrors translation.batchUpdate). */
   batchUpsertValues: editorProcedure
     .input(
       z.object({
         updates: z.array(
           z.object({
-            templateKeyId: z.number().int(),
+            sharedKeyId: z.number().int(),
             localeCode: z.string().min(2).max(16),
             value: z.string(),
           })
@@ -992,7 +959,7 @@ const templateRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       for (const u of input.updates) {
-        await upsertTemplateTranslation({
+        await upsertSharedTranslation({
           ...u,
           isTranslated: u.value.length > 0,
           updatedBy: ctx.user.id,
@@ -1001,48 +968,99 @@ const templateRouter = router({
       return { success: true, updated: input.updates.length };
     }),
 
-  // ── Project ↔ template glue ──────────────────────────────────────────────
-  /** Bind a project key to a template key (sync mode). */
+  // ── Project ↔ shared key glue ─────────────────────────────────────────────
+  /** Bind a project key to a shared key (sync mode). */
   linkProjectKey: editorProcedure
     .input(
       z.object({
         projectKeyId: z.number().int(),
-        templateKeyId: z.number().int(),
+        sharedKeyId: z.number().int(),
       })
     )
     .mutation(async ({ input }) => {
-      await linkProjectKeyToTemplate(input.projectKeyId, input.templateKeyId);
+      await linkProjectKeyToShared(input.projectKeyId, input.sharedKeyId);
       return { success: true };
     }),
-  /** Detach a project key from its template (一次性落地當前值)。 */
+  /** Detach a project key from its shared key (一次性落地當前值)。 */
   unlinkProjectKey: editorProcedure
     .input(z.object({ projectKeyId: z.number().int() }))
     .mutation(async ({ input }) => {
-      await unlinkProjectKeyFromTemplate(input.projectKeyId);
+      await unlinkProjectKeyFromShared(input.projectKeyId);
       return { success: true };
     }),
   /**
-   * Apply a template into a project. `mode: "reference"` 採同步模式，
+   * Apply selected shared keys into a project. `mode: "reference"` 採同步模式，
    * `mode: "copy"` 採一次性複製模式（之後獨立維護）。
    */
   applyToProject: editorProcedure
     .input(
       z.object({
-        templateId: z.number().int(),
         projectId: z.number().int(),
         mode: z.enum(["reference", "copy"]).default("reference"),
-        templateKeyIds: z.array(z.number().int()).optional(),
+        sharedKeyIds: z.array(z.number().int()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const stats = await applyTemplateToProject({
-        templateId: input.templateId,
+      const stats = await applySharedKeysToProject({
         projectId: input.projectId,
         mode: input.mode,
-        templateKeyIds: input.templateKeyIds,
+        sharedKeyIds: input.sharedKeyIds,
         createdBy: ctx.user.id,
       });
       return { success: true, ...stats };
+    }),
+
+  // ── History (對齊 translationKey.getHistory 的形狀) ────────────────────────
+  getHistory: protectedProcedure
+    .input(
+      z.object({
+        sharedKeyId: z.number().int().optional(),
+        localeCode: z.string().optional(),
+        limit: z.number().int().default(50),
+        offset: z.number().int().default(0),
+      })
+    )
+    .query(async ({ input }) => {
+      const [rawItems, total] = await Promise.all([
+        getSharedTranslationHistory({
+          sharedKeyId: input.sharedKeyId,
+          localeCode: input.localeCode,
+          limit: input.limit,
+          offset: input.offset,
+        }),
+        getSharedTranslationHistoryCount({
+          sharedKeyId: input.sharedKeyId,
+          localeCode: input.localeCode,
+        }),
+      ]);
+
+      const items = (rawItems as any[]).slice();
+      if (items.length > 0) {
+        const keyIdSet = Array.from(
+          new Set(items.map((r: any) => r.sharedKeyId as number))
+        );
+        const userIdSet = Array.from(
+          new Set(
+            items
+              .map((r: any) => r.changedBy as number)
+              .filter((n: any) => n != null)
+          )
+        );
+        const [keys, users] = await Promise.all([
+          getSharedKeysByIds(keyIdSet),
+          getUsersByIds(userIdSet),
+        ]);
+        const keyMap = new Map<number, string>();
+        for (const k of keys as any[]) keyMap.set(k.id, k.keyPath);
+        const userMap = new Map<number, string>();
+        for (const u of users as any[]) userMap.set(u.id, u.name ?? "");
+        for (const item of items) {
+          (item as any).keyPath = keyMap.get(item.sharedKeyId) ?? null;
+          (item as any).changerName = userMap.get(item.changedBy) ?? null;
+        }
+      }
+
+      return { items, total };
     }),
 });
 
@@ -1144,7 +1162,7 @@ export const appRouter = router({
   translationVersion: translationVersionRouter,
   translationKey: translationKeyRouter,
   translation: translationRouter,
-  template: templateRouter,
+  sharedKey: sharedKeyRouter,
   stats: statsRouter,
   user: userRouter,
 });

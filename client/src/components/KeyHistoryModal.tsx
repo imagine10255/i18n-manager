@@ -49,6 +49,12 @@ interface KeyHistoryModalProps {
   keyPath?: string;
   userIdToName: Map<number, string>;
   onClose: () => void;
+  /**
+   * 歷程資料來源：
+   *  - "translation"（預設）：專案 translation key 的編輯歷程
+   *  - "shared"：共用字典 key 的編輯歷程
+   */
+  source?: "translation" | "shared";
 }
 
 export default function KeyHistoryModal({
@@ -57,12 +63,29 @@ export default function KeyHistoryModal({
   keyPath,
   userIdToName,
   onClose,
+  source = "translation",
 }: KeyHistoryModalProps) {
-  const query = trpc.translation.getHistory.useQuery(
+  const translationQuery = trpc.translation.getHistory.useQuery(
     { keyId: keyId ?? 0, limit: 200 },
-    { enabled: open && keyId !== null }
+    { enabled: open && keyId !== null && keyId > 0 && source === "translation" }
   );
-  const records = ((query.data as any)?.items ?? []) as any[];
+  // 共用字典模式：keyId=0 代表「全域歷程」（不指定特定 sharedKey）
+  const sharedQuery = trpc.sharedKey.getHistory.useQuery(
+    keyId && keyId > 0
+      ? { sharedKeyId: keyId, limit: 200 }
+      : { limit: 200 },
+    { enabled: open && keyId !== null && source === "shared" }
+  );
+  const query = source === "shared" ? sharedQuery : translationQuery;
+  // shared history rows carry `sharedKeyId`; normalise to `keyId` so the
+  // existing renderer (which is keyed by record.keyId) keeps working.
+  const records = useMemo(() => {
+    const rows = ((query.data as any)?.items ?? []) as any[];
+    if (source === "shared") {
+      return rows.map((r: any) => ({ ...r, keyId: r.sharedKeyId }));
+    }
+    return rows;
+  }, [query.data, source]);
 
   const enriched = useMemo(
     () =>
@@ -105,7 +128,7 @@ export default function KeyHistoryModal({
         <DialogHeader className="px-6 py-4 border-b border-border/60 bg-muted/30">
           <DialogTitle className="flex items-center gap-2 text-base">
             <History className="h-4 w-4 text-primary" />
-            編輯歷程
+            {!keyId || keyId === 0 ? "全部編輯歷程" : "編輯歷程"}
           </DialogTitle>
           {keyPath && (
             <DialogDescription className="font-mono text-xs break-all pt-1">
@@ -160,7 +183,7 @@ export default function KeyHistoryModal({
                       group={g}
                       expanded={expanded.has(g.key)}
                       onToggle={() => toggle(g.key)}
-                      showKeyPath={false}
+                      showKeyPath={!keyId || keyId === 0}
                     />
                   </div>
                 );

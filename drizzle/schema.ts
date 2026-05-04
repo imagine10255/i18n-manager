@@ -95,15 +95,15 @@ export const translationKeys = mysqlTable("translation_keys", {
    * and the client tiebreaks by createdAt DESC, putting the freshest at top. */
   sortOrder: int("sortOrder").default(0).notNull(),
   /**
-   * Optional link to a template_keys row. When set, the project's translations
-   * for this key are *resolved from the template* — edits flow through the
-   * template, not the project's own `translations` rows. Set to NULL to
-   * "detach" (一次性複製模板當前值至專案 translations 之後解除引用).
+   * Optional link to a shared_keys row. When set, the project's translations
+   * for this key are *resolved from the shared dictionary* — edits flow through
+   * the shared key, not the project's own `translations` rows. Set to NULL to
+   * "detach" (一次性複製當前值至專案 translations 之後解除引用).
    *
-   * Acts like Apifox 的 model $ref：模板內容變更，所有 link 到它的 project key
-   * 立即跟著變。
+   * Acts like Apifox 的 model $ref：shared key 內容變更，所有 link 到它的
+   * project key 立即跟著變。
    */
-  templateKeyId: int("templateKeyId"),
+  sharedKeyId: int("sharedKeyId"),
   createdBy: int("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -112,7 +112,7 @@ export const translationKeys = mysqlTable("translation_keys", {
   index("idx_project_key").on(table.projectId, table.keyPath),
   index("idx_is_deleted").on(table.isDeleted),
   index("idx_sort_order").on(table.sortOrder),
-  index("idx_template_key").on(table.templateKeyId),
+  index("idx_shared_key").on(table.sharedKeyId),
 ]);
 
 export type TranslationKey = typeof translationKeys.$inferSelect;
@@ -205,35 +205,19 @@ export const translationExports = mysqlTable("translation_exports", {
 export type TranslationExport = typeof translationExports.$inferSelect;
 export type InsertTranslationExport = typeof translationExports.$inferInsert;
 
-// ─── Templates (字典/模型) ───────────────────────────────────────────────────
+// ─── Shared Keys (共用字典) ──────────────────────────────────────────────────
 //
-// 跨專案共用的 i18n 「模型」。靈感來自 Apifox 的 schema/model：
-//   • templates 是一組 key 的集合，每個 key 像一條共用詞條（例如 form.submit）
-//   • templateKeys 與 templateTranslations 與專案的 translation_keys /
-//     translations 結構對齊
-//   • 專案的 translation_keys 可以透過 templateKeyId 「引用」一條模板 key，
-//     也可以選擇把模板 keys 一次性「複製」進專案（不引用，純複製）
+// 跨專案共用的 i18n 平面字典池。靈感來自 Apifox 的 schema/model，但不再有
+// 「模板」這層分組 — 所有共用 key 直接以 keyPath 平面存放。
+//   • sharedKeys              — 共用 key（與 translation_keys 結構同型，無 projectId）
+//   • sharedTranslations      — 共用 key 的多語系值
+//   • translation_keys.sharedKeyId — 專案 key 對 shared key 的「引用」連結
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const templates = mysqlTable("templates", {
+export const sharedKeys = mysqlTable("shared_keys", {
   id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 128 }).notNull().unique(),
-  description: text("description"),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdBy: int("createdBy").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => [
-  index("idx_template_name").on(table.name),
-]);
-
-export type Template = typeof templates.$inferSelect;
-export type InsertTemplate = typeof templates.$inferInsert;
-
-export const templateKeys = mysqlTable("template_keys", {
-  id: int("id").autoincrement().primaryKey(),
-  templateId: int("templateId").notNull(),
-  keyPath: varchar("keyPath", { length: 512 }).notNull(),
+  /** 平面字典池 — keyPath 全域唯一 */
+  keyPath: varchar("keyPath", { length: 512 }).notNull().unique(),
   description: text("description"),
   isDeleted: boolean("isDeleted").default(false).notNull(),
   sortOrder: int("sortOrder").default(0).notNull(),
@@ -241,17 +225,16 @@ export const templateKeys = mysqlTable("template_keys", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => [
-  index("idx_tkey_template").on(table.templateId),
-  index("idx_tkey_path").on(table.templateId, table.keyPath),
-  index("idx_tkey_deleted").on(table.isDeleted),
+  index("idx_skey_path").on(table.keyPath),
+  index("idx_skey_deleted").on(table.isDeleted),
 ]);
 
-export type TemplateKey = typeof templateKeys.$inferSelect;
-export type InsertTemplateKey = typeof templateKeys.$inferInsert;
+export type SharedKey = typeof sharedKeys.$inferSelect;
+export type InsertSharedKey = typeof sharedKeys.$inferInsert;
 
-export const templateTranslations = mysqlTable("template_translations", {
+export const sharedTranslations = mysqlTable("shared_translations", {
   id: int("id").autoincrement().primaryKey(),
-  templateKeyId: int("templateKeyId").notNull(),
+  sharedKeyId: int("sharedKeyId").notNull(),
   localeCode: varchar("localeCode", { length: 16 }).notNull(),
   value: text("value"),
   isTranslated: boolean("isTranslated").default(false).notNull(),
@@ -259,9 +242,29 @@ export const templateTranslations = mysqlTable("template_translations", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
-  index("idx_ttr_key_locale").on(table.templateKeyId, table.localeCode),
-  index("idx_ttr_locale").on(table.localeCode),
+  index("idx_str_key_locale").on(table.sharedKeyId, table.localeCode),
+  index("idx_str_locale").on(table.localeCode),
 ]);
 
-export type TemplateTranslation = typeof templateTranslations.$inferSelect;
-export type InsertTemplateTranslation = typeof templateTranslations.$inferInsert;
+export type SharedTranslation = typeof sharedTranslations.$inferSelect;
+export type InsertSharedTranslation = typeof sharedTranslations.$inferInsert;
+
+// Shared translation history table — 與 translation_history 同型，但對應 shared key
+export const sharedTranslationHistory = mysqlTable("shared_translation_history", {
+  id: int("id").autoincrement().primaryKey(),
+  sharedKeyId: int("sharedKeyId").notNull(),
+  localeCode: varchar("localeCode", { length: 16 }).notNull(),
+  oldValue: text("oldValue"),
+  newValue: text("newValue"),
+  changedBy: int("changedBy").notNull(),
+  changedAt: timestamp("changedAt").defaultNow().notNull(),
+  action: mysqlEnum("action", ["create", "update", "delete"]).notNull(),
+}, (table) => [
+  index("idx_shist_key").on(table.sharedKeyId),
+  index("idx_shist_locale").on(table.localeCode),
+  index("idx_shist_changed_by").on(table.changedBy),
+  index("idx_shist_changed_at").on(table.changedAt),
+]);
+
+export type SharedTranslationHistory = typeof sharedTranslationHistory.$inferSelect;
+export type InsertSharedTranslationHistory = typeof sharedTranslationHistory.$inferInsert;

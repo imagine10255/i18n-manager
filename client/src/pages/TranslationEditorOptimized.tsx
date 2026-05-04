@@ -75,8 +75,8 @@ import CreateKeyModal from "@/components/CreateKeyModal";
 import KeyHistoryModal from "@/components/KeyHistoryModal";
 import ProjectHistoryModal from "@/components/ProjectHistoryModal";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
-import ApplyTemplateModal from "@/components/ApplyTemplateModal";
-import LinkTemplateKeyPopover from "@/components/LinkTemplateKeyPopover";
+import ApplySharedKeysModal from "@/components/ApplyTemplateModal";
+import LinkSharedKeyPopover from "@/components/LinkTemplateKeyPopover";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 interface TreeNode {
@@ -95,9 +95,9 @@ interface TreeNode {
   createdAt?: Date;
   /** Persisted display order — smaller = earlier. Folders bubble up min of descendants. */
   sortOrder: number;
-  /** When set, this leaf is referencing a row in `template_keys` —
-   *  values come from the template (Apifox $ref 同步模式). */
-  templateKeyId?: number | null;
+  /** When set, this leaf is referencing a row in `shared_keys` —
+   *  values come from the shared dictionary (Apifox $ref 同步模式). */
+  sharedKeyId?: number | null;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -522,7 +522,7 @@ export default function TranslationEditorOptimized() {
               // copy from the underlying key. Default 0 lets new keys (without
               // an explicit reorder) tie and tiebreak by createdAt DESC.
               sortOrder: isLeaf ? ((key as any).sortOrder ?? 0) : Number.POSITIVE_INFINITY,
-              templateKeyId: isLeaf ? ((key as any).templateKeyId ?? null) : null,
+              sharedKeyId: isLeaf ? ((key as any).sharedKeyId ?? null) : null,
             };
             map.set(currentPath, node);
 
@@ -823,31 +823,31 @@ export default function TranslationEditorOptimized() {
     },
   });
 
-  // ── Template glue ──────────────────────────────────────────────────────────
-  // Detach a project key from its template — keeps the current value in the
+  // ── Shared key glue ────────────────────────────────────────────────────────
+  // Detach a project key from its shared key — keeps the current value in the
   // project's own translations table so editors don't lose context, then
-  // clears templateKeyId so the row stops resolving via templateTranslations.
-  const unlinkTemplateMutation = trpc.template.unlinkProjectKey.useMutation({
+  // clears sharedKeyId so the row stops resolving via sharedTranslations.
+  const unlinkSharedMutation = trpc.sharedKey.unlinkProjectKey.useMutation({
     onSuccess: () => {
-      toast.success("已解除模板引用，保留當前值");
+      toast.success("已解除共用引用，保留當前值");
       utils.translationKey.listWithTranslations.invalidate();
       utils.translationKey.listByProject.invalidate();
     },
     onError: (e) => toast.error(`解除失敗：${e.message}`),
   });
-  // Apply (insert) a template into the current project — see ApplyTemplateModal.
-  const applyTemplateMutation = trpc.template.applyToProject.useMutation({
+  // Apply (insert) shared keys into the current project — see ApplySharedKeysModal.
+  const applySharedMutation = trpc.sharedKey.applyToProject.useMutation({
     onSuccess: (data: any) => {
       toast.success(
-        `已套用模板（建立 ${data.created}、重用 ${data.reused}、引用 ${data.linked}、複製 ${data.copied} 條）`
+        `已套用共用字典（建立 ${data.created}、重用 ${data.reused}、引用 ${data.linked}、複製 ${data.copied} 條）`
       );
       utils.translationKey.listByProject.invalidate();
       utils.translationKey.listWithTranslations.invalidate();
-      setShowApplyTemplate(false);
+      setShowApplyShared(false);
     },
     onError: (e) => toast.error(`套用失敗：${e.message}`),
   });
-  const [showApplyTemplate, setShowApplyTemplate] = useState(false);
+  const [showApplyShared, setShowApplyShared] = useState(false);
 
   const handleCreateKey = async (keyPath: string, description: string) => {
     if (!selectedProject) return;
@@ -1432,9 +1432,9 @@ export default function TranslationEditorOptimized() {
               新增 Key
             </Button>
 
-            {/* 從模板字典插入 keys（Apifox 風格的 model 引用 / 複製） */}
+            {/* 從共用字典插入 keys（Apifox 風格的 $ref 引用 / 複製） */}
             <Button
-              onClick={() => setShowApplyTemplate(true)}
+              onClick={() => setShowApplyShared(true)}
               disabled={!selectedProject || !canEdit}
               variant="outline"
               size="sm"
@@ -1442,11 +1442,11 @@ export default function TranslationEditorOptimized() {
               title={
                 !canEdit
                   ? "需要 editor 以上權限"
-                  : "從共用模板字典套用 keys（可選擇引用同步或一次性複製）"
+                  : "從共用字典套用 keys（可選擇引用同步或一次性複製）"
               }
             >
               <Library className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">從模板插入</span>
+              <span className="hidden sm:inline">從共用字典插入</span>
             </Button>
 
             <Button
@@ -1747,13 +1747,13 @@ export default function TranslationEditorOptimized() {
                           onViewHistory={(keyId) =>
                             setHistoryKey({ id: keyId, path: node.fullPath })
                           }
-                          onUnlinkTemplate={(keyId, keyPath) => {
+                          onUnlinkShared={(keyId, keyPath) => {
                             if (
                               confirm(
-                                `解除「${keyPath}」的模板引用？目前的值會被保留至專案內，後續模板更動將不再同步至此 key。`
+                                `解除「${keyPath}」的共用引用？目前的值會被保留至專案內，後續共用字典更動將不再同步至此 key。`
                               )
                             ) {
-                              unlinkTemplateMutation.mutate({
+                              unlinkSharedMutation.mutate({
                                 projectKeyId: keyId,
                               });
                             }
@@ -1825,19 +1825,18 @@ export default function TranslationEditorOptimized() {
           onClose={() => setShowProjectSettings(false)}
         />
 
-        {/* Apply a shared template (Apifox-style $ref) into this project. */}
-        <ApplyTemplateModal
-          open={showApplyTemplate}
+        {/* Apply shared keys (Apifox-style $ref) into this project. */}
+        <ApplySharedKeysModal
+          open={showApplyShared}
           projectId={selectedProject}
-          onClose={() => setShowApplyTemplate(false)}
-          pending={applyTemplateMutation.isPending}
-          onSubmit={({ templateId, mode, templateKeyIds }) => {
+          onClose={() => setShowApplyShared(false)}
+          pending={applySharedMutation.isPending}
+          onSubmit={({ mode, sharedKeyIds }) => {
             if (!selectedProject) return;
-            applyTemplateMutation.mutate({
+            applySharedMutation.mutate({
               projectId: selectedProject,
-              templateId,
               mode,
-              templateKeyIds,
+              sharedKeyIds,
             });
           }}
         />
@@ -2271,7 +2270,7 @@ function LeafRow({
   onRequestDelete,
   onInsertSibling,
   onViewHistory,
-  onUnlinkTemplate,
+  onUnlinkShared,
   userIdToName,
 }: {
   node: TreeNode;
@@ -2286,7 +2285,7 @@ function LeafRow({
   onRequestDelete: (keyId: number, keyPath: string) => void;
   onInsertSibling: (parentPath: string) => void;
   onViewHistory: (keyId: number) => void;
-  onUnlinkTemplate?: (keyId: number, keyPath: string) => void;
+  onUnlinkShared?: (keyId: number, keyPath: string) => void;
   userIdToName: Map<number, string>;
 }) {
   if (!node.keyId) return null;
@@ -2313,7 +2312,7 @@ function LeafRow({
     <div className="group/row w-full h-full flex items-stretch border-b border-border/60 relative">
       {/* Sticky-left: Key column (accent bar baked in)
           Use role=button + keyboard handlers so we can embed an inline
-          「引用模板」Popover trigger inside without nesting <button>s. */}
+          「引用共用 key」Popover trigger inside without nesting <button>s. */}
       <div
         role="button"
         tabIndex={0}
@@ -2342,12 +2341,12 @@ function LeafRow({
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <span className="font-mono text-sm font-medium truncate group-hover/key:text-primary transition-colors flex items-center gap-1.5">
             <span className="truncate">{node.keyPath}</span>
-            {node.templateKeyId != null && (
+            {node.sharedKeyId != null && (
               <span
                 className="inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30"
-                title="此 Key 引用自模板字典；編輯值會同步到模板上的所有引用"
+                title="此 Key 引用自共用字典；編輯值會同步到所有引用此 key 的專案"
               >
-                模板
+                共用
               </span>
             )}
           </span>
@@ -2357,21 +2356,21 @@ function LeafRow({
             </span>
           )}
         </div>
-        {/* Inline 「引用模板」按鈕 — Apifox 風格 $ref。Hover 才顯，已引用則常駐。 */}
+        {/* Inline 「引用共用 key」按鈕 — Apifox 風格 $ref。Hover 才顯，已引用則常駐。 */}
         {canEdit && (
           <div
             className={`shrink-0 ${
-              node.templateKeyId != null
+              node.sharedKeyId != null
                 ? "opacity-100"
                 : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"
             } transition-opacity`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <LinkTemplateKeyPopover
+            <LinkSharedKeyPopover
               projectKeyId={node.keyId}
               keyPath={node.fullPath}
-              linkedTemplateKeyId={node.templateKeyId ?? null}
+              linkedSharedKeyId={node.sharedKeyId ?? null}
             />
           </div>
         )}
@@ -2505,13 +2504,13 @@ function LeafRow({
                   <Plus className="h-4 w-4 mr-2" />
                   新增同層 Key
                 </DropdownMenuItem>
-                {node.templateKeyId != null && onUnlinkTemplate && (
+                {node.sharedKeyId != null && onUnlinkShared && (
                   <DropdownMenuItem
-                    onClick={() => onUnlinkTemplate(node.keyId!, node.fullPath)}
+                    onClick={() => onUnlinkShared(node.keyId!, node.fullPath)}
                     className="cursor-pointer"
                   >
                     <X className="h-4 w-4 mr-2" />
-                    解除模板引用
+                    解除共用引用
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
