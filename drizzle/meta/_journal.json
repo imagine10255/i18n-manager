@@ -43,6 +43,13 @@
       "when": 1777465751048,
       "tag": "0005_even_punisher",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1777470604293,
+      "tag": "0006_green_wendigo",
+      "breakpoints": true
     }
   ]
 }
