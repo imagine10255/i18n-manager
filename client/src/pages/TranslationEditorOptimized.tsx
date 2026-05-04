@@ -760,10 +760,12 @@ export default function TranslationEditorOptimized() {
   };
 
   const batchUpdateMutation = trpc.translation.batchUpdate.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      // 等 refetch 完成、translations 進到 cache 才清 pending — 避免儲存後
+      // input 閃一下「DB 舊值 → 新值」。
+      await utils.translationKey.listWithTranslations.invalidate();
       setPendingUpdates(new Map());
       toast.success("翻譯已保存");
-      utils.translationKey.listWithTranslations.invalidate();
     },
     onError: (error) => {
       toast.error(`保存失敗: ${error.message}`);

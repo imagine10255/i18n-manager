@@ -522,10 +522,12 @@ export default function SharedKeysManager() {
     onError: (e) => toast.error(`刪除失敗：${e.message}`),
   });
   const batchUpsertMutation = trpc.sharedKey.batchUpsertValues.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      // 先等 refetch 完成、新資料進到 allKeys，再清 pending — 避免那一瞬間
+      // pending 沒了、allKeys 還沒更新 → 看起來「儲存後跳回舊值再跳回新值」。
+      await utils.sharedKey.listWithTranslations.invalidate();
       setPendingUpdates(new Map());
       toast.success("已保存");
-      utils.sharedKey.listWithTranslations.invalidate();
     },
     onError: (e) => toast.error(`保存失敗：${e.message}`),
   });
