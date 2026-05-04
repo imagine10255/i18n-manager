@@ -110,7 +110,7 @@ export default function LinkSharedKeyPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[420px] p-0"
+        className="w-[min(720px,90vw)] p-0"
         align="start"
         onClick={(e) => e.stopPropagation()}
       >
@@ -131,7 +131,7 @@ export default function LinkSharedKeyPopover({
           </div>
         </div>
 
-        <div className="max-h-[360px] overflow-y-auto">
+        <div className="max-h-[420px] overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="text-xs text-muted-foreground p-4 text-center">
               {(flatList ?? []).length === 0
@@ -139,78 +139,110 @@ export default function LinkSharedKeyPopover({
                 : "沒有符合的 key"}
             </p>
           ) : (
-            filtered.map((r: any) => {
-              const selected = linkedSharedKeyId === r.keyId;
-              const tx = (r.translations ?? {}) as Record<string, string>;
-              return (
-                <button
-                  key={r.keyId}
-                  type="button"
-                  disabled={linkMutation.isPending}
-                  onClick={() => {
-                    linkMutation.mutate({
-                      projectKeyId,
-                      sharedKeyId: r.keyId,
-                    });
-                  }}
-                  className={`w-full text-left px-3 py-2 text-xs border-b last:border-b-0 hover:bg-muted/50 transition-colors ${
-                    selected ? "bg-primary/5" : ""
-                  }`}
-                >
-                  {/* 第一行：keyPath + 已引用標記 */}
-                  <div className="flex items-start gap-2">
-                    <KeyRound className="h-3 w-3 mt-0.5 opacity-50 shrink-0" />
-                    <code className="font-mono break-all flex-1 min-w-0">
-                      {r.keyPath}
-                    </code>
-                    {selected && (
-                      <span className="text-[10px] text-primary shrink-0 mt-0.5">
-                        已引用
-                      </span>
-                    )}
+            <>
+              {/* 語系欄頭 — sticky 在搜尋下方，所有 key row 共用 */}
+              {activeLocales.length > 0 && (
+                <div className="sticky top-0 z-10 bg-popover/95 backdrop-blur-sm border-b px-3 py-1.5">
+                  <div
+                    className="grid gap-2 pl-5"
+                    style={{
+                      gridTemplateColumns: `repeat(${activeLocales.length}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {activeLocales.map((l) => {
+                      const displayName =
+                        l.name || findPreset(l.code)?.name || l.code;
+                      return (
+                        <div
+                          key={l.code}
+                          className="flex items-center gap-1 min-w-0"
+                          title={`${displayName} (${l.code})`}
+                        >
+                          <LocaleFlag code={l.code} size="xs" />
+                          <span className="font-mono text-[10px] text-muted-foreground truncate">
+                            {l.code}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                  {r.description && (
-                    <p className="text-[11px] text-muted-foreground truncate mt-0.5 ml-5">
-                      {r.description}
-                    </p>
-                  )}
-                  {/* 對照各語系內容 */}
-                  {activeLocales.length > 0 && (
-                    <div className="mt-1.5 ml-5 space-y-0.5">
-                      {activeLocales.map((l) => {
-                        const v = tx[l.code] ?? "";
-                        const filled = v.trim().length > 0;
-                        const displayName =
-                          l.name || findPreset(l.code)?.name || l.code;
-                        return (
-                          <div
-                            key={l.code}
-                            className="flex items-center gap-1.5 text-[11px]"
-                          >
-                            <LocaleFlag code={l.code} size="xs" />
-                            <span
-                              className="font-mono text-[10px] text-muted-foreground/70 shrink-0 w-12 truncate"
-                              title={displayName}
-                            >
-                              {l.code}
-                            </span>
-                            {filled ? (
-                              <span className="truncate text-foreground/90">
-                                {v}
-                              </span>
-                            ) : (
-                              <span className="italic text-muted-foreground/50">
-                                未翻譯
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
+                </div>
+              )}
+
+              {filtered.map((r: any) => {
+                const selected = linkedSharedKeyId === r.keyId;
+                const tx = (r.translations ?? {}) as Record<string, string>;
+                return (
+                  <button
+                    key={r.keyId}
+                    type="button"
+                    disabled={linkMutation.isPending}
+                    onClick={() => {
+                      linkMutation.mutate({
+                        projectKeyId,
+                        sharedKeyId: r.keyId,
+                      });
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs border-b last:border-b-0 hover:bg-muted/50 transition-colors ${
+                      selected ? "bg-primary/5" : ""
+                    }`}
+                  >
+                    {/* 第一行：keyPath + 已引用標記 */}
+                    <div className="flex items-start gap-2">
+                      <KeyRound className="h-3 w-3 mt-0.5 opacity-50 shrink-0" />
+                      <code className="font-mono break-all flex-1 min-w-0">
+                        {r.keyPath}
+                      </code>
+                      {selected && (
+                        <span className="text-[10px] text-primary shrink-0 mt-0.5">
+                          已引用
+                        </span>
+                      )}
                     </div>
-                  )}
-                </button>
-              );
-            })
+                    {r.description && (
+                      <p className="text-[11px] text-muted-foreground truncate mt-0.5 ml-5">
+                        {r.description}
+                      </p>
+                    )}
+                    {/* 對照各語系內容 — 橫向排列，與頂部欄頭對齊；超長 truncate，hover 看完整 */}
+                    {activeLocales.length > 0 && (
+                      <div
+                        className="mt-1.5 ml-5 grid gap-2"
+                        style={{
+                          gridTemplateColumns: `repeat(${activeLocales.length}, minmax(0, 1fr))`,
+                        }}
+                      >
+                        {activeLocales.map((l) => {
+                          const v = tx[l.code] ?? "";
+                          const filled = v.trim().length > 0;
+                          return (
+                            <div
+                              key={l.code}
+                              className="text-[11px] min-w-0"
+                              title={
+                                filled
+                                  ? `${l.code}: ${v}`
+                                  : `${l.code}: 未翻譯`
+                              }
+                            >
+                              {filled ? (
+                                <span className="block truncate text-foreground/90">
+                                  {v}
+                                </span>
+                              ) : (
+                                <span className="italic text-muted-foreground/40">
+                                  —
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </>
           )}
         </div>
 
