@@ -24,7 +24,8 @@ interface ProjectSettingsModalProps {
 }
 
 function localeChineseName(locale: { code: string; name?: string | null; nativeName?: string | null }) {
-  return findPreset(locale.code)?.name ?? locale.name ?? locale.nativeName ?? locale.code;
+  // 使用者在 DB 設定的 name 優先；沒填才退回 preset / nativeName / code
+  return locale.name || findPreset(locale.code)?.name || locale.nativeName || locale.code;
 }
 
 export default function ProjectSettingsModal({

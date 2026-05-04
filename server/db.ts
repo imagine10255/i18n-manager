@@ -158,6 +158,7 @@ export async function createLocale(data: {
 export async function updateLocale(
   id: number,
   data: Partial<{
+    code: string;
     name: string;
     nativeName: string;
     isActive: boolean;
@@ -167,6 +168,90 @@ export async function updateLocale(
   const db = await getDb();
   if (!db) return;
   await db.update(locales).set(data).where(eq(locales.id, id));
+}
+
+/** 找有沒有別人佔了同一個 code（給 update 前驗證 unique 用） */
+export async function getLocaleByCode(code: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(locales)
+    .where(eq(locales.code, code))
+    .limit(1);
+  return (rows as any[])[0] ?? null;
+}
+
+/**
+ * 改 locale code — 所有 reference localeCode 字串的表都要同步更新，否則翻譯會掉。
+ * 必須在 transaction 內執行。caller 自己先確保 newCode unique。
+ *
+ * 影響：translations、translation_history、translation_snapshots、
+ *      translation_exports、shared_translations、shared_translation_history、
+ *      以及 projects.allowedLocaleCodes（JSON 陣列字串）內出現的 oldCode。
+ */
+export async function renameLocaleCode(
+  id: number,
+  oldCode: string,
+  newCode: string
+) {
+  const db = await getDb();
+  if (!db) return;
+  if (oldCode === newCode) {
+    await db.update(locales).set({}).where(eq(locales.id, id));
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    // 1) 主表
+    await tx.update(locales).set({ code: newCode }).where(eq(locales.id, id));
+    // 2) 各 reference 表
+    await tx
+      .update(translations)
+      .set({ localeCode: newCode })
+      .where(eq(translations.localeCode, oldCode));
+    await tx
+      .update(translationHistory)
+      .set({ localeCode: newCode })
+      .where(eq(translationHistory.localeCode, oldCode));
+    await tx
+      .update(translationSnapshots)
+      .set({ localeCode: newCode })
+      .where(eq(translationSnapshots.localeCode, oldCode));
+    await tx
+      .update(translationExports)
+      .set({ localeCode: newCode })
+      .where(eq(translationExports.localeCode, oldCode));
+    await tx
+      .update(sharedTranslations)
+      .set({ localeCode: newCode })
+      .where(eq(sharedTranslations.localeCode, oldCode));
+    await tx
+      .update(sharedTranslationHistory)
+      .set({ localeCode: newCode })
+      .where(eq(sharedTranslationHistory.localeCode, oldCode));
+
+    // 3) projects.allowedLocaleCodes 是 JSON 陣列字串，逐一更新
+    const projs = await tx.select().from(projects);
+    for (const p of projs as any[]) {
+      const raw = p.allowedLocaleCodes as string | null;
+      if (!raw) continue;
+      let arr: string[];
+      try {
+        arr = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(arr)) continue;
+      const idx = arr.indexOf(oldCode);
+      if (idx < 0) continue;
+      arr[idx] = newCode;
+      await tx
+        .update(projects)
+        .set({ allowedLocaleCodes: JSON.stringify(arr) })
+        .where(eq(projects.id, p.id));
+    }
+  });
 }
 
 export async function deleteLocale(id: number) {

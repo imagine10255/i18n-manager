@@ -37,9 +37,8 @@ import {
 } from "@/lib/agencyXlsx";
 
 function localeChineseName(locale: { code: string; name?: string; nativeName?: string }) {
-  const preset = findPreset(locale.code);
-  if (preset) return preset.name;
-  return locale.name || locale.nativeName || locale.code;
+  // 使用者編輯過的 DB name 優先
+  return locale.name || findPreset(locale.code)?.name || locale.nativeName || locale.code;
 }
 
 function downloadBuffer(buffer: ArrayBuffer, filename: string) {

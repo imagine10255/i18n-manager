@@ -26,11 +26,10 @@ import { Label } from "@/components/ui/label";
 import { LocaleFlag } from "@/components/LocaleFlag";
 import { findPreset } from "@/lib/localePresets";
 
-/** Resolve a locale's Chinese display name with fallbacks. */
+/** Resolve a locale's Chinese display name with fallbacks.
+ *  使用者在 DB 設定的 name 優先（被改過就用使用者的），preset 只是 fallback。 */
 function localeChineseName(locale: { code: string; name?: string; nativeName?: string }) {
-  const preset = findPreset(locale.code);
-  if (preset) return preset.name;
-  return locale.name || locale.nativeName || locale.code;
+  return locale.name || findPreset(locale.code)?.name || locale.nativeName || locale.code;
 }
 import {
   DropdownMenu,

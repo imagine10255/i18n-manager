@@ -12,6 +12,8 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { translationHistory } from "../drizzle/schema";
 import {
   createLocale,
+  getLocaleByCode,
+  renameLocaleCode,
   createTranslationHistory,
   createTranslationKey,
   deleteLocale,
@@ -96,6 +98,13 @@ const localeRouter = router({
       })
     )
     .mutation(async ({ input }) => {
+      const dup = await getLocaleByCode(input.code);
+      if (dup) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `語系代碼「${input.code}」已存在`,
+        });
+      }
       await createLocale({ ...input, isActive: true });
       return { success: true };
     }),
@@ -103,6 +112,7 @@ const localeRouter = router({
     .input(
       z.object({
         id: z.number().int(),
+        code: z.string().min(2).max(16).optional(),
         name: z.string().min(1).max(64).optional(),
         nativeName: z.string().min(1).max(64).optional(),
         isActive: z.boolean().optional(),
@@ -110,8 +120,36 @@ const localeRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const { id, ...data } = input;
-      await updateLocale(id, data);
+      const { id, code, ...rest } = input;
+
+      // 改 code 的話：先驗證 unique，然後 cascade 更新所有 reference 字串的表
+      if (code !== undefined) {
+        const all = await getAllLocales();
+        const me = (all as any[]).find((l) => l.id === id);
+        if (!me) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "找不到指定的語系",
+          });
+        }
+        if (me.code !== code) {
+          const dup = (all as any[]).find(
+            (l) => l.code === code && l.id !== id
+          );
+          if (dup) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `語系代碼「${code}」已被其他語系使用`,
+            });
+          }
+          await renameLocaleCode(id, me.code as string, code);
+        }
+      }
+
+      // 其餘欄位
+      if (Object.keys(rest).length > 0) {
+        await updateLocale(id, rest);
+      }
       return { success: true };
     }),
   delete: adminProcedure

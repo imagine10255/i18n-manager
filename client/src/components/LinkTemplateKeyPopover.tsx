@@ -181,7 +181,7 @@ export default function LinkSharedKeyPopover({
                         const v = tx[l.code] ?? "";
                         const filled = v.trim().length > 0;
                         const displayName =
-                          findPreset(l.code)?.name ?? l.name ?? l.code;
+                          l.name || findPreset(l.code)?.name || l.code;
                         return (
                           <div
                             key={l.code}

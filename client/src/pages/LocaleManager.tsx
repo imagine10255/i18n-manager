@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
-import { Globe, GripVertical, Plus, Search, Trash2 } from "lucide-react";
+import { Globe, GripVertical, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { LocaleFlag } from "@/components/LocaleFlag";
@@ -47,6 +47,12 @@ export default function LocaleManager() {
       toast.success("語系已更新");
       utils.locale.list.invalidate();
       utils.locale.listActive.invalidate();
+      // 改 code 會 cascade 更新 translations / shared_translations 等，
+      // 翻譯資料一起重抓避免顯示舊 localeCode 的對應
+      utils.translationKey.listWithTranslations.invalidate();
+      utils.sharedKey.listWithTranslations.invalidate();
+      utils.sharedKey.listAllFlat.invalidate();
+      setEditing(null);
     },
     onError: (e) => toast.error(`更新失敗：${e.message}`),
   });
@@ -94,6 +100,16 @@ export default function LocaleManager() {
     nativeName: "",
     sortOrder: 0,
   });
+
+  // 正在編輯哪一筆 locale（null = 沒在編）。展開來給 dialog 用。
+  const [editing, setEditing] = useState<{
+    id: number;
+    originalCode: string;
+    code: string;
+    name: string;
+    nativeName: string;
+    sortOrder: number;
+  } | null>(null);
 
   const resetForm = () => {
     setForm({ code: "", name: "", nativeName: "", sortOrder: 0 });
@@ -282,22 +298,43 @@ export default function LocaleManager() {
                         </Badge>
                       )}
                       {isAdmin && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `確定要刪除語系 ${locale.name}（${locale.code}）嗎？`
-                              )
-                            ) {
-                              deleteMutation.mutate({ id: locale.id });
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="編輯語系"
+                            onClick={() =>
+                              setEditing({
+                                id: locale.id,
+                                originalCode: locale.code,
+                                code: locale.code,
+                                name: locale.name,
+                                nativeName: locale.nativeName,
+                                sortOrder: locale.sortOrder ?? 0,
+                              })
                             }
-                          }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
+                            title="刪除語系"
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  `確定要刪除語系 ${locale.name}（${locale.code}）嗎？`
+                                )
+                              ) {
+                                deleteMutation.mutate({ id: locale.id });
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -515,6 +552,146 @@ export default function LocaleManager() {
                 disabled={createMutation.isPending}
               >
                 {createMutation.isPending ? "新增中..." : "新增語系"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Locale Dialog — 改 code 會 cascade 更新所有 reference 字串的表 */}
+        <Dialog
+          open={editing !== null}
+          onOpenChange={(o) => {
+            if (!o) setEditing(null);
+          }}
+        >
+          <DialogContent className="!max-w-md">
+            <DialogHeader>
+              <DialogTitle>編輯語系</DialogTitle>
+            </DialogHeader>
+
+            {editing && (
+              <div className="space-y-4 py-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <LocaleFlag code={editing.code} size="md" />
+                  <span>目前代碼：</span>
+                  <code className="font-mono">{editing.originalCode}</code>
+                </div>
+
+                <div>
+                  <Label htmlFor="edit-code" className="text-xs">
+                    語系代碼 *
+                  </Label>
+                  <Input
+                    id="edit-code"
+                    value={editing.code}
+                    onChange={(e) =>
+                      setEditing((prev) =>
+                        prev ? { ...prev, code: e.target.value } : prev
+                      )
+                    }
+                    className="mt-1 font-mono text-sm"
+                  />
+                  {editing.code !== editing.originalCode && (
+                    <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                      改代碼會同步更新所有翻譯的 localeCode（不會掉資料），但會稍久一點。
+                    </p>
+                  )}
+                  {editing.code !== editing.originalCode &&
+                    existingCodes.has(editing.code) && (
+                      <p className="mt-1 text-[11px] text-destructive">
+                        此語系代碼已被其他語系使用
+                      </p>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="edit-name" className="text-xs">
+                      中文名稱 *
+                    </Label>
+                    <Input
+                      id="edit-name"
+                      value={editing.name}
+                      onChange={(e) =>
+                        setEditing((prev) =>
+                          prev ? { ...prev, name: e.target.value } : prev
+                        )
+                      }
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="edit-nativeName" className="text-xs">
+                      母語名稱 *
+                    </Label>
+                    <Input
+                      id="edit-nativeName"
+                      value={editing.nativeName}
+                      onChange={(e) =>
+                        setEditing((prev) =>
+                          prev
+                            ? { ...prev, nativeName: e.target.value }
+                            : prev
+                        )
+                      }
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="edit-sortOrder" className="text-xs">
+                    排序
+                  </Label>
+                  <Input
+                    id="edit-sortOrder"
+                    type="number"
+                    value={editing.sortOrder}
+                    onChange={(e) =>
+                      setEditing((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              sortOrder: parseInt(e.target.value) || 0,
+                            }
+                          : prev
+                      )
+                    }
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditing(null)}>
+                取消
+              </Button>
+              <Button
+                disabled={
+                  !editing ||
+                  !editing.code.trim() ||
+                  !editing.name.trim() ||
+                  !editing.nativeName.trim() ||
+                  (editing.code !== editing.originalCode &&
+                    existingCodes.has(editing.code)) ||
+                  updateMutation.isPending
+                }
+                onClick={() => {
+                  if (!editing) return;
+                  updateMutation.mutate({
+                    id: editing.id,
+                    code:
+                      editing.code !== editing.originalCode
+                        ? editing.code.trim()
+                        : undefined,
+                    name: editing.name.trim(),
+                    nativeName: editing.nativeName.trim(),
+                    sortOrder: editing.sortOrder,
+                  });
+                }}
+              >
+                {updateMutation.isPending ? "儲存中..." : "儲存變更"}
               </Button>
             </DialogFooter>
           </DialogContent>

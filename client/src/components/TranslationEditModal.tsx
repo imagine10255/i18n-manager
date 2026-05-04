@@ -249,7 +249,7 @@ export default function TranslationEditModal({
                     <Label className="flex items-center gap-2 cursor-pointer">
                       <LocaleFlag code={locale.code} size="md" />
                       <span className="text-sm font-medium truncate">
-                        {findPreset(locale.code)?.name || locale.name || locale.nativeName}
+                        {locale.name || findPreset(locale.code)?.name || locale.nativeName}
                       </span>
                       <span className="font-mono text-[10px] text-muted-foreground">
                         {locale.code}

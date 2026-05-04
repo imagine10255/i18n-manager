@@ -103,9 +103,8 @@ function localeChineseName(locale: {
   name?: string;
   nativeName?: string;
 }) {
-  const preset = findPreset(locale.code);
-  if (preset) return preset.name;
-  return locale.name || locale.nativeName || locale.code;
+  // 使用者編輯過的 DB name 優先；沒設定才退回 preset / nativeName / code
+  return locale.name || findPreset(locale.code)?.name || locale.nativeName || locale.code;
 }
 
 function formatRelativeOrDate(d: Date): string {
