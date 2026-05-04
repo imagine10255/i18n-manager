@@ -9,8 +9,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Library, Link2, Loader2, Unlink } from "lucide-react";
 import { LocaleFlag } from "./LocaleFlag";
+import LinkSharedKeyPopover from "./LinkTemplateKeyPopover";
 import { findPreset } from "@/lib/localePresets";
 
 interface Locale {
@@ -33,6 +34,13 @@ interface TranslationEditModalProps {
   onSave: (updates: Record<string, string>) => void;
   isSaving?: boolean;
   onSaveRef?: React.MutableRefObject<(() => void) | null>;
+  /** 此 key 已引用的 sharedKeyId（沒引用 = null/undefined） */
+  sharedKeyId?: number | null;
+  /** 已引用時的公版 keyPath，用來顯示 */
+  sharedKeyPath?: string | null;
+  /** 解除引用（caller 提供 — 通常是 unlinkSharedMutation） */
+  onUnlinkShared?: () => void;
+  canEdit?: boolean;
 }
 
 const LOCALE_FLAGS: Record<string, string> = {
@@ -60,13 +68,19 @@ const LOCALE_FLAGS: Record<string, string> = {
 export default function TranslationEditModal({
   isOpen,
   keyPath,
+  keyId,
   locales,
   translations,
   onClose,
   onSave,
   isSaving = false,
   onSaveRef,
+  sharedKeyId,
+  sharedKeyPath,
+  onUnlinkShared,
+  canEdit = true,
 }: TranslationEditModalProps) {
+  const isLinked = sharedKeyId != null;
   const [editValues, setEditValues] = React.useState<Record<string, string>>(
     translations
   );
@@ -156,6 +170,63 @@ export default function TranslationEditModal({
             </div>
           </div>
         </DialogHeader>
+
+        {/* 公版引用狀態 banner */}
+        {isLinked ? (
+          <div className="px-6 py-2.5 border-b border-border/60 bg-primary/[0.04] flex items-center gap-2 text-xs">
+            <Library className="h-3.5 w-3.5 text-primary shrink-0" />
+            <span className="text-foreground/90">
+              已引用公版字典：
+            </span>
+            <code className="font-mono font-medium break-all flex-1 min-w-0">
+              {sharedKeyPath ?? `#${sharedKeyId}`}
+            </code>
+            <span
+              className="inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30"
+              title="此 Key 引用自公版字典；編輯值會同步到所有引用此 key 的專案"
+            >
+              公版
+            </span>
+            {canEdit && onUnlinkShared && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-destructive hover:bg-destructive/10 ml-1"
+                onClick={() => {
+                  if (
+                    confirm(
+                      `解除「${keyPath}」的公版引用？目前的值會被保留至專案內，後續公版字典更動將不再同步至此 key。`
+                    )
+                  ) {
+                    onUnlinkShared();
+                    onClose();
+                  }
+                }}
+              >
+                <Unlink className="h-3.5 w-3.5 mr-1" />
+                解除引用
+              </Button>
+            )}
+          </div>
+        ) : (
+          canEdit && (
+            <div className="px-6 py-2.5 border-b border-border/60 bg-muted/30 flex items-center gap-2 text-xs">
+              <Library className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-muted-foreground flex-1">
+                未引用公版字典 — 點右側可以從公版選一條 key 引用上來，多個專案就能共用
+              </span>
+              <LinkSharedKeyPopover
+                projectKeyId={keyId}
+                keyPath={keyPath}
+                linkedSharedKeyId={null}
+                onLinked={onClose}
+              />
+              <span className="text-[11px] text-muted-foreground">
+                引用公版
+              </span>
+            </div>
+          )
+        )}
 
         {/* Locale grid (scrolls) */}
         <div className="flex-1 overflow-y-auto px-6 py-5 scrollbar-elegant">

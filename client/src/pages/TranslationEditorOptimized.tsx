@@ -423,6 +423,16 @@ export default function TranslationEditorOptimized() {
   );
   const translations = translationsQuery.data ?? [];
 
+  // 公版字典 keys（用來把 sharedKeyId 對應到 keyPath，給 modal/badge 顯示）
+  const sharedKeysQuery = trpc.sharedKey.list.useQuery(undefined);
+  const sharedKeyPathById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const k of (sharedKeysQuery.data as any[]) ?? []) {
+      m.set(k.id as number, k.keyPath as string);
+    }
+    return m;
+  }, [sharedKeysQuery.data]);
+
   // 搜尋 + 版本範圍 篩選
   const rootKeys = useMemo(() => {
     let pool = allKeys;
@@ -1852,6 +1862,23 @@ export default function TranslationEditorOptimized() {
           onSave={handleSaveFromModal}
           isSaving={batchUpdateMutation.isPending}
           onSaveRef={modalSaveRef}
+          canEdit={canEdit}
+          sharedKeyId={
+            editingKeyId
+              ? translationByKeyId.get(editingKeyId)?.sharedKeyId ?? null
+              : null
+          }
+          sharedKeyPath={(() => {
+            const skid = editingKeyId
+              ? translationByKeyId.get(editingKeyId)?.sharedKeyId
+              : null;
+            return skid ? sharedKeyPathById.get(skid) ?? null : null;
+          })()}
+          onUnlinkShared={() => {
+            if (editingKeyId) {
+              unlinkSharedMutation.mutate({ projectKeyId: editingKeyId });
+            }
+          }}
         />
         <VersionSelectModal
           isOpen={showVersionModal}
