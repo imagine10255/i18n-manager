@@ -1162,16 +1162,14 @@ export default function TranslationEditorOptimized() {
     return m;
   }, [allKeys]);
 
-  // Compute minimum row width so many-locale layouts can scroll horizontally
-  // instead of squeezing inputs and clipping the meta column.
-  // Layout: pl(16) + KEY(280) + gap(12) + locales*(120 + 8 gap, less last) + 12 + META(160) + 12 + KEBAB(32) + pr(16)
+  // 計算表格最小寬度 — 語系欄不足空間時就走橫向 scroll，不要把 input 擠太小
   const tableMinWidth = useMemo(() => {
     // pl(16) + KEY(280) + gap(12) + LOCALES gap(12) + META(120) + gap(12) + KEBAB(32) + pr(16)
     const base = 16 + 280 + 12 + 12 + 120 + 12 + 32 + 16; // 500
     const localesWidth =
       locales.length === 0
         ? 0
-        : locales.length * 120 + (locales.length - 1) * 8;
+        : locales.length * 200 + (locales.length - 1) * 8; // 每個 locale 至少 200px
     return base + localesWidth;
   }, [locales.length]);
 
@@ -1719,7 +1717,7 @@ export default function TranslationEditorOptimized() {
                   {locales.map((locale) => (
                     <div
                       key={locale.code}
-                      className="flex-1 min-w-[120px] flex items-center gap-2"
+                      className="flex-1 min-w-[200px] flex items-center gap-2"
                       title={`${localeChineseName(locale)} (${locale.code})`}
                     >
                       <LocaleFlag code={locale.code} size="md" />
@@ -2534,7 +2532,7 @@ function LeafRow({
           return (
             <div
               key={locale.code}
-              className={`flex-1 min-w-[120px] relative transition-opacity ${dimmed ? "opacity-45" : ""}`}
+              className={`flex-1 min-w-[200px] relative transition-opacity ${dimmed ? "opacity-45" : ""}`}
               onClick={(e) => e.stopPropagation()}
             >
               <input

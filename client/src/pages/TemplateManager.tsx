@@ -662,12 +662,13 @@ export default function SharedKeysManager() {
   };
 
   // ── derived widths ────────────────────────────────────────────────────────
+  // 每個 locale 欄至少 200px — 跟 cell 的 min-w-[200px] 對齊；不夠就橫向 scroll
   const tableMinWidth = useMemo(() => {
     const base = 16 + 280 + 12 + 12 + 120 + 12 + 32 + 16;
     const localesWidth =
       locales.length === 0
         ? 0
-        : locales.length * 120 + (locales.length - 1) * 8;
+        : locales.length * 200 + (locales.length - 1) * 8;
     return base + localesWidth;
   }, [locales.length]);
 
@@ -994,7 +995,7 @@ export default function SharedKeysManager() {
                       {locales.map((locale) => (
                         <div
                           key={locale.code}
-                          className="flex-1 min-w-[120px] flex items-center gap-2"
+                          className="flex-1 min-w-[200px] flex items-center gap-2"
                           title={`${localeChineseName(locale)} (${locale.code})`}
                         >
                           <LocaleFlag code={locale.code} size="md" />
@@ -1361,7 +1362,7 @@ function LeafRow({
           return (
             <div
               key={locale.code}
-              className="flex-1 min-w-[120px] relative"
+              className="flex-1 min-w-[200px] relative"
               onClick={(e) => e.stopPropagation()}
             >
               <input
