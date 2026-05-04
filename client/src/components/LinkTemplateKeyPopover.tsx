@@ -17,6 +17,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Link2, Search, Library, KeyRound } from "lucide-react";
 import { toast } from "sonner";
+import { LocaleFlag } from "@/components/LocaleFlag";
+import { findPreset } from "@/lib/localePresets";
 
 export interface LinkSharedKeyPopoverProps {
   /** 此 row 對應的專案 translation key id。 */
@@ -39,10 +41,17 @@ export default function LinkSharedKeyPopover({
   const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
 
-  // 一次抓全部公版 keys（flat 格式）。資料量小，popover 開啟時 lazy-fetch。
+  // 一次抓全部公版 keys（flat 格式 + 各語系值）。資料量小，popover 開啟時 lazy-fetch。
   const { data: flatList } = trpc.sharedKey.listAllFlat.useQuery(undefined, {
     enabled: open,
   });
+  // 啟用中語系，用來決定要在 row 下方顯示哪幾個語系的對照值
+  const { data: locales } = trpc.locale.listActive.useQuery(undefined, {
+    enabled: open,
+  });
+  const activeLocales =
+    (locales as Array<{ code: string; name: string; nativeName: string }>) ??
+    [];
 
   const filtered = useMemo(() => {
     const list = flatList ?? [];
@@ -51,7 +60,11 @@ export default function LinkSharedKeyPopover({
     return list.filter(
       (r: any) =>
         r.keyPath.toLowerCase().includes(q) ||
-        (r.description ?? "").toLowerCase().includes(q)
+        (r.description ?? "").toLowerCase().includes(q) ||
+        // 連翻譯內容也納入搜尋（找得到「確認」就能撈到 common.button.confirm）
+        Object.values(r.translations ?? {}).some((v: any) =>
+          String(v ?? "").toLowerCase().includes(q)
+        )
     );
   }, [flatList, search]);
 
@@ -97,7 +110,7 @@ export default function LinkSharedKeyPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[360px] p-0"
+        className="w-[420px] p-0"
         align="start"
         onClick={(e) => e.stopPropagation()}
       >
@@ -111,14 +124,14 @@ export default function LinkSharedKeyPopover({
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜尋 key…"
+              placeholder="搜尋 key 或翻譯內容…"
               autoFocus
               className="pl-6 h-7 text-xs"
             />
           </div>
         </div>
 
-        <div className="max-h-72 overflow-y-auto">
+        <div className="max-h-[360px] overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="text-xs text-muted-foreground p-4 text-center">
               {(flatList ?? []).length === 0
@@ -128,6 +141,7 @@ export default function LinkSharedKeyPopover({
           ) : (
             filtered.map((r: any) => {
               const selected = linkedSharedKeyId === r.keyId;
+              const tx = (r.translations ?? {}) as Record<string, string>;
               return (
                 <button
                   key={r.keyId}
@@ -139,25 +153,60 @@ export default function LinkSharedKeyPopover({
                       sharedKeyId: r.keyId,
                     });
                   }}
-                  className={`w-full text-left px-3 py-2 text-xs border-b last:border-b-0 hover:bg-muted/50 transition-colors flex items-start gap-2 ${
+                  className={`w-full text-left px-3 py-2 text-xs border-b last:border-b-0 hover:bg-muted/50 transition-colors ${
                     selected ? "bg-primary/5" : ""
                   }`}
                 >
-                  <KeyRound className="h-3 w-3 mt-0.5 opacity-50 shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <code className="truncate">{r.keyPath}</code>
-                    </div>
-                    {r.description && (
-                      <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                        {r.description}
-                      </p>
+                  {/* 第一行：keyPath + 已引用標記 */}
+                  <div className="flex items-start gap-2">
+                    <KeyRound className="h-3 w-3 mt-0.5 opacity-50 shrink-0" />
+                    <code className="font-mono break-all flex-1 min-w-0">
+                      {r.keyPath}
+                    </code>
+                    {selected && (
+                      <span className="text-[10px] text-primary shrink-0 mt-0.5">
+                        已引用
+                      </span>
                     )}
                   </div>
-                  {selected && (
-                    <span className="text-[10px] text-primary shrink-0">
-                      已引用
-                    </span>
+                  {r.description && (
+                    <p className="text-[11px] text-muted-foreground truncate mt-0.5 ml-5">
+                      {r.description}
+                    </p>
+                  )}
+                  {/* 對照各語系內容 */}
+                  {activeLocales.length > 0 && (
+                    <div className="mt-1.5 ml-5 space-y-0.5">
+                      {activeLocales.map((l) => {
+                        const v = tx[l.code] ?? "";
+                        const filled = v.trim().length > 0;
+                        const displayName =
+                          findPreset(l.code)?.name ?? l.name ?? l.code;
+                        return (
+                          <div
+                            key={l.code}
+                            className="flex items-center gap-1.5 text-[11px]"
+                          >
+                            <LocaleFlag code={l.code} size="xs" />
+                            <span
+                              className="font-mono text-[10px] text-muted-foreground/70 shrink-0 w-12 truncate"
+                              title={displayName}
+                            >
+                              {l.code}
+                            </span>
+                            {filled ? (
+                              <span className="truncate text-foreground/90">
+                                {v}
+                              </span>
+                            ) : (
+                              <span className="italic text-muted-foreground/50">
+                                未翻譯
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </button>
               );

@@ -830,15 +830,25 @@ const sharedKeyRouter = router({
     .query(({ input }) => getSharedKeys({ search: input?.search })),
 
   /**
-   * Flat 列出所有公版 keys，給專案編輯器的「引用公版 key」popover 一次抓完用。
+   * Flat 列出所有公版 keys + 多語系值。給專案編輯器的「引用公版 key」popover
+   * 用，使用者挑 key 時可以直接看到目前公版各語系的值，比較好對照。
    * 資料量通常很小（<幾百筆），不需要分頁。
    */
   listAllFlat: protectedProcedure.query(async () => {
     const all = await getSharedKeys({});
+    const keyIds = (all as any[]).map((k) => k.id as number);
+    const trs = await getSharedTranslationsByKeyIds(keyIds);
+    const byKey = new Map<number, Record<string, string>>();
+    for (const t of trs as any[]) {
+      const m = byKey.get(t.sharedKeyId) ?? {};
+      m[t.localeCode] = t.value ?? "";
+      byKey.set(t.sharedKeyId, m);
+    }
     return (all as any[]).map((k) => ({
       keyId: k.id,
       keyPath: k.keyPath,
       description: k.description ?? null,
+      translations: byKey.get(k.id) ?? {},
     }));
   }),
 
