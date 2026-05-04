@@ -123,17 +123,15 @@ export default function TemplateManager() {
                 <SelectContent>
                   {(templates ?? []).map((t: any) => (
                     <SelectItem key={t.id} value={String(t.id)}>
-                      <span className="flex items-center gap-2">
-                        <span>{t.name}</span>
-                        {!t.isActive && (
-                          <Badge
-                            variant="secondary"
-                            className="text-[10px] py-0"
-                          >
-                            停用
-                          </Badge>
-                        )}
-                      </span>
+                      {t.name}
+                      {!t.isActive && (
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] py-0 ml-2"
+                        >
+                          停用
+                        </Badge>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
