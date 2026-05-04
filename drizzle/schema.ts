@@ -7,6 +7,7 @@ import {
   varchar,
   boolean,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
@@ -205,12 +206,12 @@ export const translationExports = mysqlTable("translation_exports", {
 export type TranslationExport = typeof translationExports.$inferSelect;
 export type InsertTranslationExport = typeof translationExports.$inferInsert;
 
-// ─── Shared Keys (共用字典) ──────────────────────────────────────────────────
+// ─── Shared Keys (公版字典) ──────────────────────────────────────────────────
 //
 // 跨專案共用的 i18n 平面字典池。靈感來自 Apifox 的 schema/model，但不再有
-// 「模板」這層分組 — 所有共用 key 直接以 keyPath 平面存放。
-//   • sharedKeys              — 共用 key（與 translation_keys 結構同型，無 projectId）
-//   • sharedTranslations      — 共用 key 的多語系值
+// 「模板」這層分組 — 所有公版 key 直接以 keyPath 平面存放。
+//   • sharedKeys              — 公版 key（與 translation_keys 結構同型，無 projectId）
+//   • sharedTranslations      — 公版 key 的多語系值
 //   • translation_keys.sharedKeyId — 專案 key 對 shared key 的「引用」連結
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -242,7 +243,8 @@ export const sharedTranslations = mysqlTable("shared_translations", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
-  index("idx_str_key_locale").on(table.sharedKeyId, table.localeCode),
+  // 必須是 UNIQUE，否則 onDuplicateKeyUpdate 不會觸發、會塞重複列
+  uniqueIndex("uniq_str_key_locale").on(table.sharedKeyId, table.localeCode),
   index("idx_str_locale").on(table.localeCode),
 ]);
 

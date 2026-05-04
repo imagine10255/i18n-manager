@@ -52,7 +52,7 @@ interface KeyHistoryModalProps {
   /**
    * 歷程資料來源：
    *  - "translation"（預設）：專案 translation key 的編輯歷程
-   *  - "shared"：共用字典 key 的編輯歷程
+   *  - "shared"：公版字典 key 的編輯歷程
    */
   source?: "translation" | "shared";
 }
@@ -69,7 +69,7 @@ export default function KeyHistoryModal({
     { keyId: keyId ?? 0, limit: 200 },
     { enabled: open && keyId !== null && keyId > 0 && source === "translation" }
   );
-  // 共用字典模式：keyId=0 代表「全域歷程」（不指定特定 sharedKey）
+  // 公版字典模式：keyId=0 代表「全域歷程」（不指定特定 sharedKey）
   const sharedQuery = trpc.sharedKey.getHistory.useQuery(
     keyId && keyId > 0
       ? { sharedKeyId: keyId, limit: 200 }

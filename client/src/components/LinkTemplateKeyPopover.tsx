@@ -1,9 +1,9 @@
 /**
- * LinkSharedKeyPopover — 行內「引用共用 key」選擇器，靈感來自 Apifox 的 $ref。
+ * LinkSharedKeyPopover — 行內「引用公版 key」選擇器，靈感來自 Apifox 的 $ref。
  *
  * 在翻譯編輯器的 leaf row 旁顯示一個小圖示，點下去會跳出可搜尋的清單，
- * 讓使用者直接挑一條共用 key 把這列「引用」上去。引用後 row 上會顯示
- * 「共用」徽章，且編輯值會同步到共用字典。
+ * 讓使用者直接挑一條公版 key 把這列「引用」上去。引用後 row 上會顯示
+ * 「公版」徽章，且編輯值會同步到公版字典。
  */
 
 import { useMemo, useState } from "react";
@@ -39,7 +39,7 @@ export default function LinkSharedKeyPopover({
   const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
 
-  // 一次抓全部共用 keys（flat 格式）。資料量小，popover 開啟時 lazy-fetch。
+  // 一次抓全部公版 keys（flat 格式）。資料量小，popover 開啟時 lazy-fetch。
   const { data: flatList } = trpc.sharedKey.listAllFlat.useQuery(undefined, {
     enabled: open,
   });
@@ -57,7 +57,7 @@ export default function LinkSharedKeyPopover({
 
   const linkMutation = trpc.sharedKey.linkProjectKey.useMutation({
     onSuccess: () => {
-      toast.success("已引用共用 key");
+      toast.success("已引用公版 key");
       utils.translationKey.listWithTranslations.invalidate();
       utils.translationKey.listByProject.invalidate();
       setOpen(false);
@@ -90,8 +90,8 @@ export default function LinkSharedKeyPopover({
               ? "text-primary hover:bg-primary/10"
               : "text-muted-foreground/50 hover:text-foreground hover:bg-muted"
           }`}
-          title={isLinked ? "已引用共用 key，點擊變更或解除" : "引用共用字典中的 key"}
-          aria-label="引用共用 key"
+          title={isLinked ? "已引用公版 key，點擊變更或解除" : "引用公版字典中的 key"}
+          aria-label="引用公版 key"
         >
           <Link2 className="h-3.5 w-3.5" />
         </button>
@@ -104,7 +104,7 @@ export default function LinkSharedKeyPopover({
         <div className="px-3 py-2 border-b text-xs">
           <div className="flex items-center gap-1.5 mb-1.5 text-muted-foreground">
             <Library className="h-3.5 w-3.5" />
-            為 <code className="text-foreground">{keyPath}</code> 引用共用 key
+            為 <code className="text-foreground">{keyPath}</code> 引用公版 key
           </div>
           <div className="relative">
             <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
@@ -122,7 +122,7 @@ export default function LinkSharedKeyPopover({
           {filtered.length === 0 ? (
             <p className="text-xs text-muted-foreground p-4 text-center">
               {(flatList ?? []).length === 0
-                ? "目前還沒有任何共用 key 可引用"
+                ? "目前還沒有任何公版 key 可引用"
                 : "沒有符合的 key"}
             </p>
           ) : (

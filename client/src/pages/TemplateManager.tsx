@@ -9,7 +9,7 @@
  *
  * 與 TranslationEditor 的差異：
  *   • 沒有「專案 / 版本」概念（這就是字典池本體）
- *   • 沒有「設定」與「從共用字典插入」（不適用）
+ *   • 沒有「設定」與「從公版字典插入」（不適用）
  */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -259,7 +259,6 @@ export default function SharedKeysManager() {
   const [pendingUpdates, setPendingUpdates] = useState<
     Map<string, { sharedKeyId: number; localeCode: string; value: string }>
   >(new Map());
-  const hasChanges = pendingUpdates.size > 0;
 
   // ── modals ────────────────────────────────────────────────────────────────
   const [showAddKey, setShowAddKey] = useState(false);
@@ -441,38 +440,69 @@ export default function SharedKeysManager() {
   }, []);
 
   // ── cell helpers ──────────────────────────────────────────────────────────
+  // O(1) keyId → row 查表，避免每個 input 每次 render 都做 O(n) find
+  const keyById = useMemo(() => {
+    const m = new Map<number, any>();
+    for (const k of allKeys) m.set(k.id as number, k);
+    return m;
+  }, [allKeys]);
+
   const getValue = useCallback(
     (keyId: number, localeCode: string) => {
       const k = `${keyId}:${localeCode}`;
       if (pendingUpdates.has(k)) return pendingUpdates.get(k)!.value;
-      const row = allKeys.find((x) => x.id === keyId);
+      const row = keyById.get(keyId);
       return row?.translations?.[localeCode]?.value ?? "";
     },
-    [pendingUpdates, allKeys]
-  );
-  const isPending = useCallback(
-    (keyId: number, localeCode: string) =>
-      pendingUpdates.has(`${keyId}:${localeCode}`),
-    [pendingUpdates]
+    [pendingUpdates, keyById]
   );
 
+  // pending 是否「真的」與 DB 不同 — 用來顯示橘色標記
+  const isPending = useCallback(
+    (keyId: number, localeCode: string) => {
+      const k = `${keyId}:${localeCode}`;
+      if (!pendingUpdates.has(k)) return false;
+      const pendingVal = pendingUpdates.get(k)!.value;
+      const row = keyById.get(keyId);
+      const original = row?.translations?.[localeCode]?.value ?? "";
+      return pendingVal !== original;
+    },
+    [pendingUpdates, keyById]
+  );
+
+  // 永遠 set 進 pending，不去比對 original — 比對放到 hasChanges/handleSave 那邊算。
+  // 之前用 `value === original ? delete : set` 會在 listWithTranslations
+  // invalidate 後 allKeys 還沒回來時把空字串 pending 誤刪 → 看起來就是「按 backspace
+  // 清空又彈回去」。這個寫法根本不依賴 allKeys，所以也不會造成 LeafRow 因
+  // handleCellChange 重建而連帶 re-render。
   const handleCellChange = useCallback(
     (keyId: number, localeCode: string, value: string) => {
       const k = `${keyId}:${localeCode}`;
-      const row = allKeys.find((x) => x.id === keyId);
-      const original = row?.translations?.[localeCode]?.value ?? "";
       setPendingUpdates((prev) => {
         const next = new Map(prev);
-        if (value === original) {
-          next.delete(k);
-        } else {
-          next.set(k, { sharedKeyId: keyId, localeCode, value });
-        }
+        next.set(k, { sharedKeyId: keyId, localeCode, value });
         return next;
       });
     },
-    [allKeys]
+    []
   );
+
+  // 真正會被送到後端的 updates — 過濾掉與 DB 相同的 no-op。
+  const meaningfulUpdates = useMemo(() => {
+    const out: Array<{
+      sharedKeyId: number;
+      localeCode: string;
+      value: string;
+    }> = [];
+    for (const p of Array.from(pendingUpdates.values())) {
+      const row = keyById.get(p.sharedKeyId);
+      const original = row?.translations?.[p.localeCode]?.value ?? "";
+      if (p.value !== original) out.push(p);
+    }
+    return out;
+  }, [pendingUpdates, keyById]);
+
+  const hasChanges = meaningfulUpdates.length > 0;
 
   // ── mutations ─────────────────────────────────────────────────────────────
   const createKeyMutation = trpc.sharedKey.create.useMutation({
@@ -508,11 +538,9 @@ export default function SharedKeysManager() {
   });
 
   const handleSave = useCallback(async () => {
-    if (pendingUpdates.size === 0) return;
-    await batchUpsertMutation.mutateAsync({
-      updates: Array.from(pendingUpdates.values()),
-    });
-  }, [pendingUpdates, batchUpsertMutation]);
+    if (meaningfulUpdates.length === 0) return;
+    await batchUpsertMutation.mutateAsync({ updates: meaningfulUpdates });
+  }, [meaningfulUpdates, batchUpsertMutation]);
 
   const handleResortByName = useCallback(() => {
     if (allKeys.length === 0) return;
@@ -652,7 +680,7 @@ export default function SharedKeysManager() {
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border/50 flex-wrap">
             <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">
               <Library className="h-3.5 w-3.5" />
-              共用字典
+              公版字典
             </div>
             <div className="h-5 w-px bg-border/70" />
 
@@ -661,7 +689,7 @@ export default function SharedKeysManager() {
               size="sm"
               className="h-9 gap-1.5"
               onClick={() => setHistoryKey({ id: 0, path: "" })}
-              title="查看共用字典的全域編輯歷程"
+              title="查看公版字典的全域編輯歷程"
             >
               <History className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">歷程</span>
@@ -750,7 +778,7 @@ export default function SharedKeysManager() {
               {hasChanges ? (
                 <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-medium">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  {pendingUpdates.size} 項待保存
+                  {meaningfulUpdates.length} 項待保存
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs">
@@ -834,7 +862,7 @@ export default function SharedKeysManager() {
                   <span className="hidden sm:inline">匯出</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuContent align="end" className="w-60">
                 <DropdownMenuLabel className="text-xs">單一語系</DropdownMenuLabel>
                 {allLocales.map((l) => (
                   <DropdownMenuItem
@@ -842,9 +870,11 @@ export default function SharedKeysManager() {
                     onClick={() => handleExportLocale(l.code)}
                     className="cursor-pointer"
                   >
-                    <LocaleFlag code={l.code} size="sm" className="mr-2" />
-                    <span className="font-medium">{localeChineseName(l)}</span>
-                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                    <LocaleFlag code={l.code} size="sm" className="mr-2 shrink-0" />
+                    <span className="font-medium flex-1 truncate">
+                      {localeChineseName(l)}
+                    </span>
+                    <span className="text-muted-foreground ml-2 font-mono text-xs shrink-0">
                       {l.code}.json
                     </span>
                   </DropdownMenuItem>
@@ -903,7 +933,7 @@ export default function SharedKeysManager() {
               ) : (
                 <>
                   <Save className="h-3.5 w-3.5" />
-                  保存{hasChanges ? ` (${pendingUpdates.size})` : ""}
+                  保存{hasChanges ? ` (${meaningfulUpdates.length})` : ""}
                 </>
               )}
             </Button>
@@ -936,12 +966,12 @@ export default function SharedKeysManager() {
                 <FolderTree className="h-7 w-7 text-white" strokeWidth={2} />
               </div>
               <h3 className="text-base font-semibold tracking-tight">
-                {searchTerm ? "找不到符合的 Key" : "目前沒有任何共用 Key"}
+                {searchTerm ? "找不到符合的 Key" : "目前沒有任何公版 Key"}
               </h3>
               <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 {searchTerm
                   ? `「${searchTerm}」沒有匹配的結果，試試其他關鍵字`
-                  : "點擊「新增 Key」開始建立第一個共用條目"}
+                  : "點擊「新增 Key」開始建立第一個公版條目"}
               </p>
             </div>
           </div>
@@ -1462,7 +1492,7 @@ function AddKeyDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新增共用 Key</DialogTitle>
+          <DialogTitle>新增公版 Key</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -1476,7 +1506,7 @@ function AddKeyDialog({
             />
             {dup && (
               <p className="text-xs text-destructive">
-                此 keyPath 已存在於共用字典
+                此 keyPath 已存在於公版字典
               </p>
             )}
           </div>

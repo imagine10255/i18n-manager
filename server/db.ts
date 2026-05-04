@@ -748,11 +748,11 @@ export async function deleteUser(userId: number) {
   await db.delete(users).where(eq(users.id, userId));
 }
 
-// ─── Shared Keys (共用字典) queries ──────────────────────────────────────────
+// ─── Shared Keys (公版字典) queries ──────────────────────────────────────────
 //
 // 跨專案共用的平面字典池。沒有「模板」這層分組 — 所有 shared key 直接平面儲存。
-//   • sharedKeys              — 共用 key（與 translation_keys 結構同型，無 projectId）
-//   • sharedTranslations      — 共用 key 的多語系值
+//   • sharedKeys              — 公版 key（與 translation_keys 結構同型，無 projectId）
+//   • sharedTranslations      — 公版 key 的多語系值
 //   • translation_keys.sharedKeyId — 專案 key 對 shared key 的「引用」連結
 // ─────────────────────────────────────────────────────────────────────────────
 

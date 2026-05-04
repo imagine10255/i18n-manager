@@ -1,0 +1,17 @@
+-- 把 shared_translations.(sharedKeyId, localeCode) 改成 UNIQUE，讓 upsertSharedTranslation
+-- 的 onDuplicateKeyUpdate 才會真的觸發。
+--
+-- 原 0008 生出來的 idx_str_key_locale 普通 index 可能本來就不存在（這個 migration 在某些
+-- 機器上被中斷），所以這裡只新增 unique index，不嘗試 drop 舊的。如果 DB 裡還留著
+-- idx_str_key_locale，可手動 `ALTER TABLE shared_translations DROP INDEX idx_str_key_locale;`
+-- 清掉冗餘 index（功能正確不影響，只是多佔空間）。
+--
+-- ⚠️ 如果你的 shared_translations 已經有 (sharedKeyId, localeCode) 重複列（之前匯入累積的），
+--    這個 ADD CONSTRAINT 會失敗。請先跑：
+--      DELETE st1 FROM shared_translations st1
+--      INNER JOIN shared_translations st2
+--        ON st1.sharedKeyId = st2.sharedKeyId
+--       AND st1.localeCode  = st2.localeCode
+--       AND st1.id          < st2.id;
+--    把每組 (sharedKeyId, localeCode) 只保留最新一筆，再重跑 db:push。
+ALTER TABLE `shared_translations` ADD CONSTRAINT `uniq_str_key_locale` UNIQUE(`sharedKeyId`,`localeCode`);

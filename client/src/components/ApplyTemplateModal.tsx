@@ -1,5 +1,5 @@
 /**
- * ApplySharedKeysModal — 把共用字典池中挑選的 keys「插入」到目前的專案。
+ * ApplySharedKeysModal — 把公版字典池中挑選的 keys「插入」到目前的專案。
  *
  * 兩種模式（對應使用者問卷的「混合」需求）：
  *   • reference  ─ 引用同步：專案 key 透過 sharedKeyId 連結 shared key。
@@ -108,10 +108,10 @@ export default function ApplySharedKeysModal({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Library className="h-4 w-4" /> 從共用字典插入
+            <Library className="h-4 w-4" /> 從公版字典插入
           </DialogTitle>
           <DialogDescription>
-            從共用字典池挑選要套用到此專案的 keys，並決定要採用「同步引用」還是「一次性複製」。
+            從公版字典池挑選要套用到此專案的 keys，並決定要採用「同步引用」還是「一次性複製」。
           </DialogDescription>
         </DialogHeader>
 
@@ -129,7 +129,7 @@ export default function ApplySharedKeysModal({
                 <div>
                   <div className="text-sm font-medium">引用同步（推薦）</div>
                   <div className="text-xs text-muted-foreground">
-                    建立專案 key 並指向共用字典。改共用字典會即時反映到此專案。
+                    建立專案 key 並指向公版字典。改公版字典會即時反映到此專案。
                   </div>
                 </div>
               </label>
@@ -138,7 +138,7 @@ export default function ApplySharedKeysModal({
                 <div>
                   <div className="text-sm font-medium">一次性複製</div>
                   <div className="text-xs text-muted-foreground">
-                    把共用字典現在的值複製到專案，之後互不影響。
+                    把公版字典現在的值複製到專案，之後互不影響。
                   </div>
                 </div>
               </label>
@@ -175,7 +175,7 @@ export default function ApplySharedKeysModal({
               </div>
               {filteredKeys.length === 0 ? (
                 <p className="text-xs text-muted-foreground p-3">
-                  共用字典目前沒有可選 keys
+                  公版字典目前沒有可選 keys
                 </p>
               ) : (
                 filteredKeys.map((k: any) => (

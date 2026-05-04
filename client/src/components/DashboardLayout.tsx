@@ -66,7 +66,7 @@ const menuGroups: { label: string; items: MenuItem[] }[] = [
     label: "Translation",
     items: [
       { icon: BookOpen, label: "翻譯編輯器", path: "/editor" },
-      { icon: Library, label: "共用字典", path: "/shared-keys" },
+      { icon: Library, label: "公版字典", path: "/shared-keys" },
       { icon: Clock, label: "修改歷程", path: "/history" },
     ],
   },

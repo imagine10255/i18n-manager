@@ -829,7 +829,7 @@ export default function TranslationEditorOptimized() {
   // clears sharedKeyId so the row stops resolving via sharedTranslations.
   const unlinkSharedMutation = trpc.sharedKey.unlinkProjectKey.useMutation({
     onSuccess: () => {
-      toast.success("已解除共用引用，保留當前值");
+      toast.success("已解除公版引用，保留當前值");
       utils.translationKey.listWithTranslations.invalidate();
       utils.translationKey.listByProject.invalidate();
     },
@@ -839,7 +839,7 @@ export default function TranslationEditorOptimized() {
   const applySharedMutation = trpc.sharedKey.applyToProject.useMutation({
     onSuccess: (data: any) => {
       toast.success(
-        `已套用共用字典（建立 ${data.created}、重用 ${data.reused}、引用 ${data.linked}、複製 ${data.copied} 條）`
+        `已套用公版字典（建立 ${data.created}、重用 ${data.reused}、引用 ${data.linked}、複製 ${data.copied} 條）`
       );
       utils.translationKey.listByProject.invalidate();
       utils.translationKey.listWithTranslations.invalidate();
@@ -1432,7 +1432,7 @@ export default function TranslationEditorOptimized() {
               新增 Key
             </Button>
 
-            {/* 從共用字典插入 keys（Apifox 風格的 $ref 引用 / 複製） */}
+            {/* 從公版字典插入 keys（Apifox 風格的 $ref 引用 / 複製） */}
             <Button
               onClick={() => setShowApplyShared(true)}
               disabled={!selectedProject || !canEdit}
@@ -1442,11 +1442,11 @@ export default function TranslationEditorOptimized() {
               title={
                 !canEdit
                   ? "需要 editor 以上權限"
-                  : "從共用字典套用 keys（可選擇引用同步或一次性複製）"
+                  : "從公版字典套用 keys（可選擇引用同步或一次性複製）"
               }
             >
               <Library className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">從共用字典插入</span>
+              <span className="hidden sm:inline">從公版字典插入</span>
             </Button>
 
             <Button
@@ -1505,13 +1505,13 @@ export default function TranslationEditorOptimized() {
                   <span className="hidden sm:inline">匯出</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuContent align="end" className="w-60">
                 <DropdownMenuItem
                   onClick={handleExportAll}
                   className="cursor-pointer font-medium"
                 >
-                  <FileJson className="h-4 w-4 mr-2 text-primary" />
-                  全部語系（ZIP）
+                  <FileJson className="h-4 w-4 mr-2 text-primary shrink-0" />
+                  <span className="flex-1">全部語系（ZIP）</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel className="text-xs">單一語系</DropdownMenuLabel>
@@ -1521,9 +1521,11 @@ export default function TranslationEditorOptimized() {
                     onClick={() => handleExportLocale(l.code)}
                     className="cursor-pointer"
                   >
-                    <LocaleFlag code={l.code} size="sm" className="mr-2" />
-                    <span className="font-medium">{localeChineseName(l)}</span>
-                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                    <LocaleFlag code={l.code} size="sm" className="mr-2 shrink-0" />
+                    <span className="font-medium flex-1 truncate">
+                      {localeChineseName(l)}
+                    </span>
+                    <span className="text-muted-foreground ml-2 font-mono text-xs shrink-0">
                       {l.code}.json
                     </span>
                   </DropdownMenuItem>
@@ -1750,7 +1752,7 @@ export default function TranslationEditorOptimized() {
                           onUnlinkShared={(keyId, keyPath) => {
                             if (
                               confirm(
-                                `解除「${keyPath}」的共用引用？目前的值會被保留至專案內，後續共用字典更動將不再同步至此 key。`
+                                `解除「${keyPath}」的公版引用？目前的值會被保留至專案內，後續公版字典更動將不再同步至此 key。`
                               )
                             ) {
                               unlinkSharedMutation.mutate({
@@ -2312,7 +2314,7 @@ function LeafRow({
     <div className="group/row w-full h-full flex items-stretch border-b border-border/60 relative">
       {/* Sticky-left: Key column (accent bar baked in)
           Use role=button + keyboard handlers so we can embed an inline
-          「引用共用 key」Popover trigger inside without nesting <button>s. */}
+          「引用公版 key」Popover trigger inside without nesting <button>s. */}
       <div
         role="button"
         tabIndex={0}
@@ -2344,9 +2346,9 @@ function LeafRow({
             {node.sharedKeyId != null && (
               <span
                 className="inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30"
-                title="此 Key 引用自共用字典；編輯值會同步到所有引用此 key 的專案"
+                title="此 Key 引用自公版字典；編輯值會同步到所有引用此 key 的專案"
               >
-                共用
+                公版
               </span>
             )}
           </span>
@@ -2356,7 +2358,7 @@ function LeafRow({
             </span>
           )}
         </div>
-        {/* Inline 「引用共用 key」按鈕 — Apifox 風格 $ref。Hover 才顯，已引用則常駐。 */}
+        {/* Inline 「引用公版 key」按鈕 — Apifox 風格 $ref。Hover 才顯，已引用則常駐。 */}
         {canEdit && (
           <div
             className={`shrink-0 ${
@@ -2510,7 +2512,7 @@ function LeafRow({
                     className="cursor-pointer"
                   >
                     <X className="h-4 w-4 mr-2" />
-                    解除共用引用
+                    解除公版引用
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />

@@ -263,7 +263,7 @@ const translationKeyRouter = router({
       // Shared-key-aware translation resolution: keys with `sharedKeyId` set
       // pull their values from `shared_translations`, otherwise from the
       // project's own `translations` rows. Each cell carries `fromShared`
-      // so the editor can show the 「共用」 badge.
+      // so the editor can show the 「公版」 badge.
       const allTranslations = await getResolvedTranslationsForProjectKeys(
         keys.map((k: any) => ({ id: k.id, sharedKeyId: k.sharedKeyId ?? null }))
       );
@@ -811,7 +811,7 @@ const userRouter = router({
     }),
 });
 
-// ─── Shared Key (共用字典) router ─────────────────────────────────────────────
+// ─── Shared Key (公版字典) router ─────────────────────────────────────────────
 //
 // 跨專案共用的 i18n 詞條池（平面字典）。對 shared key 的編輯會即時反映到所有
 // reference 過它的 project key (因為 listWithTranslations 會以 sharedKeyId
@@ -830,7 +830,7 @@ const sharedKeyRouter = router({
     .query(({ input }) => getSharedKeys({ search: input?.search })),
 
   /**
-   * Flat 列出所有共用 keys，給專案編輯器的「引用共用 key」popover 一次抓完用。
+   * Flat 列出所有公版 keys，給專案編輯器的「引用公版 key」popover 一次抓完用。
    * 資料量通常很小（<幾百筆），不需要分頁。
    */
   listAllFlat: protectedProcedure.query(async () => {
@@ -842,7 +842,7 @@ const sharedKeyRouter = router({
     }));
   }),
 
-  /** 共用 key + 多語系值，整理成跟 translationKey.listWithTranslations 一致的形狀。 */
+  /** 公版 key + 多語系值，整理成跟 translationKey.listWithTranslations 一致的形狀。 */
   listWithTranslations: protectedProcedure
     .input(
       z
@@ -887,7 +887,7 @@ const sharedKeyRouter = router({
       if ((existing as any[]).some((k: any) => k.keyPath === input.keyPath)) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `共用 key「${input.keyPath}」已存在`,
+          message: `公版 key「${input.keyPath}」已存在`,
         });
       }
       const id = await createSharedKey({ ...input, createdBy: ctx.user.id });
