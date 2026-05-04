@@ -1,312 +1,110 @@
-# Docker 容器化開發環境指南
+# Docker Compose 設置
 
-## 快速開始
+## 系統需求
 
-### 開發環境（推薦）
+- Docker 24+ / Docker Compose v2
 
-一鍵啟動完整的開發環境（包含 MySQL 和應用）：
+## 快速開始（開發環境）
 
-```bash
-# 啟動開發環境
-docker-compose --profile dev up -d
-```
-
-開發環境將在以下地址可用：
-- **前端**：http://localhost:5173
-- **後端 API**：http://localhost:3000
-- **MySQL**：localhost:3306 (用戶: i18n, 密碼: i18n_password)
-
-### 生產環境
+開發環境內建合理預設值，直接起來就能跑：
 
 ```bash
-# 建立 .env 文件（參考下方環境變數配置）
-cat > .env << EOF
-MYSQL_ROOT_PASSWORD=your_root_password
-MYSQL_DATABASE=i18n_manager
-MYSQL_USER=i18n
-MYSQL_PASSWORD=your_password
-VITE_APP_ID=your_app_id
-JWT_SECRET=your_jwt_secret
-OWNER_OPEN_ID=your_owner_id
-OWNER_NAME=Your Name
-EOF
-
-# 啟動生產環境
-docker-compose --profile prod up -d
+docker compose --profile dev up -d
 ```
 
-生產環境將在以下地址可用：
-- **應用**：http://localhost:3000
+啟動後：
 
-## 常用命令
+- 應用：<http://localhost:3001>（Express + Vite middleware 共用同一個 port）
+- MySQL：localhost:3306（user: `i18n`，password: `i18n_password`，db: `i18n_manager`）
 
-### 查看日誌
+第一次登入用 `LOCAL_AUTH_USERNAME` / `LOCAL_AUTH_PASSWORD`（預設 `admin` / `admin123`）。進系統後到「使用者管理」建 admin 帳號，之後就可以拿掉 `LOCAL_AUTH_*` 走真正的 email + password 登入。
 
-```bash
-# 查看所有服務日誌
-docker-compose logs -f
+## 正式環境
 
-# 查看特定服務日誌
-docker-compose logs -f app-dev
-docker-compose logs -f mysql
-
-# 查看最後 100 行日誌
-docker-compose logs --tail=100 app-dev
-```
-
-### 停止服務
-
-```bash
-# 停止所有服務
-docker-compose down
-
-# 停止並刪除數據
-docker-compose down -v
-```
-
-### 進入容器
-
-```bash
-# 進入應用容器
-docker-compose exec app-dev sh
-
-# 進入 MySQL 容器
-docker-compose exec mysql mysql -u root -p
-```
-
-### 重新構建
-
-```bash
-# 重新構建應用鏡像
-docker-compose build app-dev
-
-# 重新構建並啟動
-docker-compose build app-dev && docker-compose --profile dev up -d
-```
-
-## 環境變數配置
-
-### 開發環境（使用預設值）
-
-開發環境已配置預設值，可直接啟動：
-
-```bash
-docker-compose --profile dev up -d
-```
-
-預設配置：
-- MySQL 用戶：`i18n`
-- MySQL 密碼：`i18n_password`
-- 應用端口：`3000`
-- Vite 端口：`5173`
-
-### 生產環境（需要配置）
-
-建立 `.env` 文件並配置以下變數：
+建立 `.env`，至少填這幾個（其他用 docker-compose 的預設值就夠）：
 
 ```env
-# MySQL 配置
-MYSQL_ROOT_PASSWORD=your_secure_root_password
-MYSQL_DATABASE=i18n_manager
+# DB
+MYSQL_ROOT_PASSWORD=請改強密碼
 MYSQL_USER=i18n
-MYSQL_PASSWORD=your_secure_password
-MYSQL_PORT=3306
+MYSQL_PASSWORD=請改強密碼
+MYSQL_DATABASE=i18n_manager
 
-# 應用配置
-APP_PORT=3000
-NODE_ENV=production
+# App
+JWT_SECRET=請放隨機長字串（換金鑰會讓所有 cookie 失效）
+OWNER_OPEN_ID=任何唯一字串都行（fallback 登入用）
 
-# OAuth 設定（Manus OAuth）
-VITE_APP_ID=your_app_id
-OAUTH_SERVER_URL=https://api.manus.im
-VITE_OAUTH_PORTAL_URL=https://portal.manus.im
-JWT_SECRET=your_jwt_secret_key_change_in_production
+# 一次性 bootstrap：建好 admin 後就把這兩行刪掉
+LOCAL_AUTH_USERNAME=admin
+LOCAL_AUTH_PASSWORD=請改強密碼
 
-# 擁有者資訊
-OWNER_OPEN_ID=your_open_id
-OWNER_NAME=Your Name
-
-# Manus API
-BUILT_IN_FORGE_API_URL=https://api.manus.im
-BUILT_IN_FORGE_API_KEY=your_api_key
-VITE_FRONTEND_FORGE_API_URL=https://api.manus.im
-VITE_FRONTEND_FORGE_API_KEY=your_frontend_api_key
-
-# 應用設定
-VITE_APP_TITLE=i18n Manager
-VITE_APP_LOGO=
+# 顯示
+VITE_APP_TITLE=多語系翻譯管理系統
 ```
 
-## 數據持久化
-
-MySQL 數據存儲在 Docker 命名卷 `mysql_data` 中，即使容器停止也會保留。
-
-要完全清除數據：
+啟動：
 
 ```bash
-docker-compose down -v
+docker compose --profile prod up -d
 ```
 
-## 開發工作流程
+正式環境跑在 <http://localhost:3000>（容器內 `pnpm start` 預設 PORT=3000）。
 
-1. **啟動開發環境**
-   ```bash
-   docker-compose --profile dev up -d
-   ```
+## 常用指令
 
-2. **編輯代碼**
-   - 修改 `client/src/` 中的前端代碼
-   - 修改 `server/` 中的後端代碼
-   - 修改 `drizzle/schema.ts` 中的數據庫 schema
+```bash
+# 看 log
+docker compose logs -f app-dev          # 或 app-prod
 
-3. **查看變化**
-   - 前端自動熱重載（Vite HMR）
-   - 後端自動重啟（nodemon）
-   - 查看日誌：`docker-compose logs -f app-dev`
+# 進容器
+docker compose exec app-dev sh
+docker compose exec mysql mysql -u root -p
 
-4. **數據庫遷移**
-   ```bash
-   # 進入容器
-   docker-compose exec app-dev sh
-   
-   # 生成遷移
-   pnpm drizzle-kit generate
-   
-   # 執行遷移
-   pnpm drizzle-kit migrate
-   ```
+# 停 / 全清
+docker compose down                      # 停服務但保留資料
+docker compose down -v                   # 連 mysql_data volume 一起清
 
-5. **運行測試**
-   ```bash
-   docker-compose exec app-dev pnpm test
-   ```
+# 重 build app image（改 Dockerfile* 後需要）
+docker compose build app-dev
+docker compose --profile dev up -d
+```
 
-6. **停止開發環境**
-   ```bash
-   docker-compose down
-   ```
+## 資料庫 migration
+
+dev 容器啟動時自動跑：`pnpm drizzle-kit migrate`。
+
+如果你改了 `drizzle/schema.ts`：
+
+```bash
+# 在容器內生 migration
+docker compose exec app-dev pnpm drizzle-kit generate
+
+# 重啟讓 migrate 自動跑（也可以直接 exec migrate）
+docker compose restart app-dev
+```
+
+## 環境變數對照表
+
+| 變數 | 必填 | 說明 |
+| --- | --- | --- |
+| `DATABASE_URL` | ⭕ | 容器內由 compose 自動拼 `mysql://USER:PASS@mysql:3306/DB`，host 是 service name 不是 localhost |
+| `JWT_SECRET` | ⭕ | JWT 簽章金鑰 |
+| `OWNER_OPEN_ID` | ⭕ | fallback 登入時寫進使用者表的 openId |
+| `OWNER_NAME` | | 顯示名稱 fallback |
+| `LOCAL_AUTH_USERNAME` / `LOCAL_AUTH_PASSWORD` | | bootstrap 登入；建好 admin 後可移除 |
+| `VITE_APP_TITLE` | | Login 頁標題 |
+| `MYSQL_*` | | MySQL 容器初始化用 |
+| `APP_PORT` | | 對外 port（dev 預設 3001，prod 預設 3000） |
+| `MYSQL_PORT` | | host 上對外 port，預設 3306 |
 
 ## 故障排除
 
-### 端口已被占用
+**3001/3000/3306 port 已被佔用**：在 `.env` 改 `APP_PORT`、`MYSQL_PORT`，然後 `docker compose down && docker compose --profile dev up -d`。
 
-如果 3000 或 5173 端口已被占用，修改 `.env`：
+**容器一直 restart**：`docker compose logs app-dev` 看錯誤。最常見是 `JWT_SECRET` 沒設、或 mysql 還沒 healthy 就被 connect。
 
-```env
-APP_PORT=3001
-VITE_PORT=5174
-```
+**MySQL 連不上**：確認 `docker compose ps` 看 mysql 是 healthy。容器之間連線必須用 service 名 `mysql`，不是 `localhost`。
 
-然後重新啟動：
+**改了 Dockerfile 沒生效**：要 rebuild — `docker compose build app-dev` 後再 up。
 
-```bash
-docker-compose down
-docker-compose --profile dev up -d
-```
-
-### MySQL 連接失敗
-
-確保 MySQL 容器已啟動並健康：
-
-```bash
-docker-compose ps
-```
-
-如果 MySQL 不健康，查看日誌：
-
-```bash
-docker-compose logs mysql
-```
-
-重啟 MySQL：
-
-```bash
-docker-compose restart mysql
-```
-
-### 應用無法連接資料庫
-
-檢查 `DATABASE_URL` 是否正確。容器內應使用服務名 `mysql` 而不是 `localhost`：
-
-```env
-DATABASE_URL=mysql://i18n:i18n_password@mysql:3306/i18n_manager
-```
-
-### 清除所有容器和卷
-
-```bash
-docker-compose down -v
-docker system prune -a
-```
-
-### 查看容器狀態
-
-```bash
-# 列出所有容器
-docker ps -a
-
-# 查看容器詳細信息
-docker inspect i18n-app-dev
-
-# 查看容器資源使用情況
-docker stats
-```
-
-## 性能優化
-
-### 增加 MySQL 記憶體
-
-編輯 `docker-compose.yml`，在 `mysql` 服務中添加：
-
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 2G
-    reservations:
-      memory: 1G
-```
-
-### 優化 Node.js 記憶體
-
-編輯 `docker-compose.yml`，在 `app-dev` 服務中添加：
-
-```yaml
-environment:
-  NODE_OPTIONS: --max-old-space-size=2048
-```
-
-## 生產部署
-
-### 構建生產鏡像
-
-```bash
-docker build -t i18n-manager:latest .
-```
-
-### 推送到鏡像倉庫
-
-```bash
-docker tag i18n-manager:latest your-registry/i18n-manager:latest
-docker push your-registry/i18n-manager:latest
-```
-
-### 在 Kubernetes 中部署
-
-參考 `k8s/` 目錄中的配置文件（如果存在）
-
-### 使用 Docker Swarm 部署
-
-```bash
-docker swarm init
-docker stack deploy -c docker-compose.yml i18n-manager
-```
-
-## 支援
-
-如有問題，請檢查：
-1. Docker 和 Docker Compose 是否正確安裝
-2. 所有環境變數是否正確配置（生產環境）
-3. 端口是否被占用
-4. 磁盤空間是否充足
-5. 查看容器日誌：`docker-compose logs -f`
+**Migration 失敗（DROP INDEX 找不到等）**：通常是 DB 跟 schema snapshot 對不上。看 `drizzle/<NNNN>_*.sql` 內容，必要時 `docker compose exec mysql mysql -u root -p` 進去手動處理。

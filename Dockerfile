@@ -1,43 +1,34 @@
-# 多階段構建：構建階段
+# 正式環境 Dockerfile — 多階段 build
+#
+# Stage 1: 安裝完整依賴（含 dev）→ 跑 vite build + esbuild server
+# Stage 2: 只裝 production 依賴 + 把 dist/、drizzle/、必要 runtime files 帶過去
+#
+# `pnpm build` 產出：
+#   • dist/index.js           ← 後端入口（esbuild --outdir=dist 從 server/_core/index.ts）
+#   • dist/public/...         ← 前端靜態資源（vite build）
+#
+# 啟動命令在 docker-compose.yml 裡（先 migrate 再 start）。
+
 FROM node:22-alpine AS builder
-
 WORKDIR /app
-
-# 複製 package 文件
+RUN npm install -g pnpm
 COPY package.json pnpm-lock.yaml ./
-
-# 安裝依賴
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
-
-# 複製所有源代碼
+RUN pnpm install --frozen-lockfile
 COPY . .
-
-# 構建應用
 RUN pnpm build
 
-# 多階段構建：運行階段
 FROM node:22-alpine
-
 WORKDIR /app
-
-# 安裝 pnpm
 RUN npm install -g pnpm
 
-# 複製 package 文件
 COPY package.json pnpm-lock.yaml ./
+# drizzle-kit 是 devDependency，但 production 容器裡需要跑 migrate，所以這邊也要全裝
+RUN pnpm install --frozen-lockfile
 
-# 只安裝生產依賴
-RUN pnpm install --frozen-lockfile --prod
-
-# 從構建階段複製構建結果
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
-COPY --from=builder /app/server ./server
-COPY --from=builder /app/client/public ./client/public
 COPY --from=builder /app/shared ./shared
 
-# 暴露端口
 EXPOSE 3000
 
-# 啟動應用
-CMD ["node", "dist/server/index.js"]
+CMD ["node", "dist/index.js"]

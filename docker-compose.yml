@@ -1,7 +1,17 @@
-version: '3.8'
+# i18n Manager — Docker Compose
+#
+# 兩個 profile：
+#   • dev  — Dockerfile.dev，hot reload，預設 port 3001
+#   • prod — Dockerfile，跑打包後的 dist/index.js，預設 port 3000
+#
+# 啟動：
+#   開發環境  pnpm 不在 host 也行：docker compose --profile dev up -d
+#   正式環境  docker compose --profile prod up -d
+#
+# 環境變數請在 .env 設定（不是 .env.local，那是 host 上 `pnpm dev` 用的）。
 
 services:
-  # MySQL 資料庫服務
+  # ─── MySQL ───────────────────────────────────────────────────────────────
   mysql:
     image: mysql:8.0
     container_name: i18n-mysql
@@ -10,7 +20,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-i18n_manager}
       MYSQL_USER: ${MYSQL_USER:-i18n}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-i18n_password}
-      TZ: 'Asia/Shanghai'
+      TZ: 'Asia/Taipei'
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
@@ -24,7 +34,7 @@ services:
       retries: 5
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
-  # Node.js 應用服務（開發環境）
+  # ─── App（dev）──────────────────────────────────────────────────────────
   app-dev:
     build:
       context: .
@@ -32,22 +42,18 @@ services:
     container_name: i18n-app-dev
     environment:
       NODE_ENV: development
+      # 容器內必須用 service 名 mysql，不是 localhost
       DATABASE_URL: mysql://${MYSQL_USER:-i18n}:${MYSQL_PASSWORD:-i18n_password}@mysql:3306/${MYSQL_DATABASE:-i18n_manager}
-      VITE_APP_ID: ${VITE_APP_ID:-dev_app_id}
-      OAUTH_SERVER_URL: ${OAUTH_SERVER_URL:-https://api.manus.im}
-      VITE_OAUTH_PORTAL_URL: ${VITE_OAUTH_PORTAL_URL:-https://portal.manus.im}
-      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_key_change_in_production}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_me}
       OWNER_OPEN_ID: ${OWNER_OPEN_ID:-dev_owner}
       OWNER_NAME: ${OWNER_NAME:-Developer}
-      BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL:-https://api.manus.im}
-      BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY:-dev_api_key}
-      VITE_FRONTEND_FORGE_API_URL: ${VITE_FRONTEND_FORGE_API_URL:-https://api.manus.im}
-      VITE_FRONTEND_FORGE_API_KEY: ${VITE_FRONTEND_FORGE_API_KEY:-dev_frontend_api_key}
-      VITE_APP_TITLE: ${VITE_APP_TITLE:-i18n Manager}
-      VITE_APP_LOGO: ${VITE_APP_LOGO:-}
+      # Bootstrap 登入：DB 還沒 user 時用這組進系統
+      LOCAL_AUTH_USERNAME: ${LOCAL_AUTH_USERNAME:-admin}
+      LOCAL_AUTH_PASSWORD: ${LOCAL_AUTH_PASSWORD:-admin123}
+      VITE_APP_TITLE: ${VITE_APP_TITLE:-多語系翻譯管理系統}
     ports:
-      - "${APP_PORT:-3000}:3000"
-      - "${VITE_PORT:-5173}:5173"
+      # 單一 port — Express + Vite middleware 都跑在 3001（pnpm dev 已設 PORT=3001）
+      - "${APP_PORT:-3001}:3001"
     volumes:
       - .:/app
       - /app/node_modules
@@ -57,11 +63,12 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    # 起來先跑 migration，再啟動 dev server
     command: sh -c "pnpm drizzle-kit migrate && pnpm dev"
     profiles:
       - dev
 
-  # Node.js 應用服務（生產環境）
+  # ─── App（prod）─────────────────────────────────────────────────────────
   app-prod:
     build:
       context: .
@@ -69,19 +76,15 @@ services:
     container_name: i18n-app-prod
     environment:
       NODE_ENV: production
+      PORT: ${APP_PORT:-3000}
       DATABASE_URL: mysql://${MYSQL_USER:-i18n}:${MYSQL_PASSWORD:-i18n_password}@mysql:3306/${MYSQL_DATABASE:-i18n_manager}
-      VITE_APP_ID: ${VITE_APP_ID}
-      OAUTH_SERVER_URL: ${OAUTH_SERVER_URL}
-      VITE_OAUTH_PORTAL_URL: ${VITE_OAUTH_PORTAL_URL}
       JWT_SECRET: ${JWT_SECRET}
       OWNER_OPEN_ID: ${OWNER_OPEN_ID}
-      OWNER_NAME: ${OWNER_NAME}
-      BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL}
-      BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY}
-      VITE_FRONTEND_FORGE_API_URL: ${VITE_FRONTEND_FORGE_API_URL}
-      VITE_FRONTEND_FORGE_API_KEY: ${VITE_FRONTEND_FORGE_API_KEY}
-      VITE_APP_TITLE: ${VITE_APP_TITLE}
-      VITE_APP_LOGO: ${VITE_APP_LOGO}
+      OWNER_NAME: ${OWNER_NAME:-}
+      # 正式環境一般建好 admin user 後就移除 LOCAL_AUTH_*
+      LOCAL_AUTH_USERNAME: ${LOCAL_AUTH_USERNAME:-}
+      LOCAL_AUTH_PASSWORD: ${LOCAL_AUTH_PASSWORD:-}
+      VITE_APP_TITLE: ${VITE_APP_TITLE:-多語系翻譯管理系統}
     ports:
       - "${APP_PORT:-3000}:3000"
     networks:
@@ -90,6 +93,8 @@ services:
       mysql:
         condition: service_healthy
     restart: unless-stopped
+    # production image 已經在 build 階段 build 完 dist/，這邊只跑 migration + start
+    command: sh -c "pnpm drizzle-kit migrate && node dist/index.js"
     profiles:
       - prod
 
