@@ -65,6 +65,8 @@ import {
   Eye,
   Settings2,
   Library,
+  Building2,
+  FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -77,6 +79,8 @@ import ProjectHistoryModal from "@/components/ProjectHistoryModal";
 import ProjectSettingsModal from "@/components/ProjectSettingsModal";
 import ApplySharedKeysModal from "@/components/ApplyTemplateModal";
 import LinkSharedKeyPopover from "@/components/LinkTemplateKeyPopover";
+import ExportForAgencyModal from "@/components/ExportForAgencyModal";
+import ImportFromAgencyModal from "@/components/ImportFromAgencyModal";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 interface TreeNode {
@@ -662,19 +666,37 @@ export default function TranslationEditorOptimized() {
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  const getTranslationValue = (keyId: number, localeCode: string) => {
-    const key = `${keyId}:${localeCode}`;
-    if (pendingUpdates.has(key)) {
-      return pendingUpdates.get(key)!.value;
-    }
-    const trans = translations.find(
-      (t: any) => t.id === keyId && t.translations?.[localeCode]
-    );
-    return trans?.translations?.[localeCode]?.value ?? "";
-  };
+  // O(1) keyId → translation row，取代每個 cell 每次 render 都跑 O(n) find。
+  const translationByKeyId = useMemo(() => {
+    const m = new Map<number, any>();
+    for (const t of translations as any[]) m.set(t.id as number, t);
+    return m;
+  }, [translations]);
 
-  const isPending = (keyId: number, localeCode: string) =>
-    pendingUpdates.has(`${keyId}:${localeCode}`);
+  const getTranslationValue = useCallback(
+    (keyId: number, localeCode: string) => {
+      const key = `${keyId}:${localeCode}`;
+      if (pendingUpdates.has(key)) {
+        return pendingUpdates.get(key)!.value;
+      }
+      const t = translationByKeyId.get(keyId);
+      return t?.translations?.[localeCode]?.value ?? "";
+    },
+    [pendingUpdates, translationByKeyId]
+  );
+
+  // pending 是否「真的」與 DB 不同 — 用來顯示橘色待保存標記
+  const isPending = useCallback(
+    (keyId: number, localeCode: string) => {
+      const key = `${keyId}:${localeCode}`;
+      if (!pendingUpdates.has(key)) return false;
+      const pendingVal = pendingUpdates.get(key)!.value;
+      const t = translationByKeyId.get(keyId);
+      const original = t?.translations?.[localeCode]?.value ?? "";
+      return pendingVal !== original;
+    },
+    [pendingUpdates, translationByKeyId]
+  );
 
   /** Whether a cell was actually edited in the currently filtered version.
    * When no version is selected, this returns true so cells render at full
@@ -698,22 +720,22 @@ export default function TranslationEditorOptimized() {
     return result;
   };
 
-  const handleCellChange = (keyId: number, localeCode: string, value: string) => {
-    const key = `${keyId}:${localeCode}`;
-    if (value.trim()) {
+  // 永遠 set 進 pending，不在這邊 trim/比對。之前用 `if (value.trim()) { set } else { delete }`
+  // 會在使用者把欄位 backspace 清空時把 pending 移除 → getValue 退回 DB 舊值 → 看起來
+  // 像「按 backspace 清不掉、清掉就復原」。把比對改放到 hasChanges/handleSave 那邊算。
+  // 此外 useCallback 沒依賴任何會變的 state → ref 穩定，LeafRow 才不會被 props 變動帶
+  // 著一起 re-render，input 才不卡頓。
+  const handleCellChange = useCallback(
+    (keyId: number, localeCode: string, value: string) => {
+      const key = `${keyId}:${localeCode}`;
       setPendingUpdates((prev) => {
         const next = new Map(prev);
         next.set(key, { keyId, localeCode, value });
         return next;
       });
-    } else {
-      setPendingUpdates((prev) => {
-        const next = new Map(prev);
-        next.delete(key);
-        return next;
-      });
-    }
-  };
+    },
+    []
+  );
 
   const handleOpenEditModal = (keyId: number, keyPath: string) => {
     setEditingKeyId(keyId);
@@ -738,32 +760,43 @@ export default function TranslationEditorOptimized() {
     },
   });
 
+  // 真正會被送到後端的 updates — 過濾掉與 DB 相同的 no-op（使用者把值改回原值時）
+  const meaningfulUpdates = useMemo(() => {
+    const out: Array<{ keyId: number; localeCode: string; value: string }> = [];
+    for (const p of Array.from(pendingUpdates.values())) {
+      const t = translationByKeyId.get(p.keyId);
+      const original = t?.translations?.[p.localeCode]?.value ?? "";
+      if (p.value !== original) out.push(p);
+    }
+    return out;
+  }, [pendingUpdates, translationByKeyId]);
+
+  const hasChanges = meaningfulUpdates.length > 0;
+
   const handleSave = useCallback(async () => {
-    if (pendingUpdates.size === 0 || !selectedProject) return;
+    if (meaningfulUpdates.length === 0 || !selectedProject) return;
     // If a version is already selected (filtered), save directly to that
     // version without prompting again.
     if (selectedVersion !== null) {
-      const updates = Array.from(pendingUpdates.values());
       await batchUpdateMutation.mutateAsync({
-        updates,
+        updates: meaningfulUpdates,
         versionId: selectedVersion,
       });
       const v = versions.find((x) => x.id === selectedVersion);
       toast.success(
-        `已保存 ${updates.length} 項變更到版本 ${v?.versionNumber ?? selectedVersion}`
+        `已保存 ${meaningfulUpdates.length} 項變更到版本 ${v?.versionNumber ?? selectedVersion}`
       );
       setPendingUpdates(new Map());
       return;
     }
     // No version selected — ask the user which version to bind these changes to
     setShowVersionModal(true);
-  }, [pendingUpdates, selectedProject, selectedVersion, versions, batchUpdateMutation]);
+  }, [meaningfulUpdates, selectedProject, selectedVersion, versions, batchUpdateMutation]);
 
   const handleVersionConfirm = async (versionId: number, versionNumber: string) => {
-    if (pendingUpdates.size === 0 || !selectedProject) return;
-    const updates = Array.from(pendingUpdates.values());
-    await batchUpdateMutation.mutateAsync({ updates, versionId });
-    toast.success(`已保存 ${updates.length} 項變更到版本 ${versionNumber}`);
+    if (meaningfulUpdates.length === 0 || !selectedProject) return;
+    await batchUpdateMutation.mutateAsync({ updates: meaningfulUpdates, versionId });
+    toast.success(`已保存 ${meaningfulUpdates.length} 項變更到版本 ${versionNumber}`);
     setPendingUpdates(new Map());
     setShowVersionModal(false);
   };
@@ -848,6 +881,8 @@ export default function TranslationEditorOptimized() {
     onError: (e) => toast.error(`套用失敗：${e.message}`),
   });
   const [showApplyShared, setShowApplyShared] = useState(false);
+  const [showExportAgency, setShowExportAgency] = useState(false);
+  const [showImportAgency, setShowImportAgency] = useState(false);
 
   const handleCreateKey = async (keyPath: string, description: string) => {
     if (!selectedProject) return;
@@ -1049,7 +1084,7 @@ export default function TranslationEditorOptimized() {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         if (modalSaveRef.current) modalSaveRef.current();
-        else if (pendingUpdates.size > 0) handleSave();
+        else if (hasChanges) handleSave();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "a" && e.target === document.body) {
         e.preventDefault();
@@ -1062,7 +1097,7 @@ export default function TranslationEditorOptimized() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [pendingUpdates.size, expandAll, collapseAll, handleSave]);
+  }, [hasChanges, expandAll, collapseAll, handleSave]);
 
   const currentProject = useMemo(
     () => (projects as any[]).find((x) => x.id === selectedProject),
@@ -1106,7 +1141,6 @@ export default function TranslationEditorOptimized() {
 
   const totalLeafKeys = allKeys.length;
   const totalLocales = locales.length;
-  const hasChanges = pendingUpdates.size > 0;
 
   // keyId → keyPath, used by ProjectHistoryModal
   const keyIdToPath = useMemo(() => {
@@ -1395,7 +1429,7 @@ export default function TranslationEditorOptimized() {
               {hasChanges ? (
                 <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-medium">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  {pendingUpdates.size} 項待保存
+                  {meaningfulUpdates.length} 項待保存
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs">
@@ -1474,22 +1508,48 @@ export default function TranslationEditorOptimized() {
               <span className="hidden sm:inline">依命名重排</span>
             </Button>
 
-            {/* Import — single button, multi-select files; locale inferred from filename */}
-            <Button
-              disabled={!selectedProject || !canEdit || locales.length === 0}
-              variant="outline"
-              size="sm"
-              className="h-9 gap-1.5"
-              onClick={triggerImportFilePicker}
-              title={
-                !canEdit
-                  ? "需要 editor 以上權限"
-                  : "匯入 JSON（檔名 = 語系代碼，可一次選多檔）"
-              }
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">匯入</span>
-            </Button>
+            {/* Import dropdown — JSON or 翻譯社 Excel */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  disabled={!selectedProject || !canEdit || locales.length === 0}
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-1.5"
+                  title={!canEdit ? "需要 editor 以上權限" : "匯入"}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">匯入</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuItem
+                  onClick={triggerImportFilePicker}
+                  className="cursor-pointer"
+                >
+                  <FileJson className="h-4 w-4 mr-2 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium">JSON</div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      檔名 = 語系代碼，可多檔
+                    </div>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => setShowImportAgency(true)}
+                  className="cursor-pointer"
+                >
+                  <Building2 className="h-4 w-4 mr-2 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium">翻譯社 Excel</div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      匯入翻譯社填回的 .xlsx，含 diff 預覽
+                    </div>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Export dropdown */}
             <DropdownMenu>
@@ -1512,6 +1572,13 @@ export default function TranslationEditorOptimized() {
                 >
                   <FileJson className="h-4 w-4 mr-2 text-primary shrink-0" />
                   <span className="flex-1">全部語系（ZIP）</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setShowExportAgency(true)}
+                  className="cursor-pointer font-medium"
+                >
+                  <FileSpreadsheet className="h-4 w-4 mr-2 text-primary shrink-0" />
+                  <span className="flex-1">翻譯社 Excel</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel className="text-xs">單一語系</DropdownMenuLabel>
@@ -1585,7 +1652,7 @@ export default function TranslationEditorOptimized() {
               ) : (
                 <>
                   <Save className="h-3.5 w-3.5" />
-                  保存{hasChanges ? ` (${pendingUpdates.size})` : ""}
+                  保存{hasChanges ? ` (${meaningfulUpdates.length})` : ""}
                 </>
               )}
             </Button>
@@ -1839,6 +1906,52 @@ export default function TranslationEditorOptimized() {
               projectId: selectedProject,
               mode,
               sharedKeyIds,
+            });
+          }}
+        />
+
+        {/* 翻譯社 Excel 匯出 */}
+        <ExportForAgencyModal
+          open={showExportAgency}
+          onClose={() => setShowExportAgency(false)}
+          projectName={currentProjectName ?? "project"}
+          locales={projectLocales as any[]}
+          keys={(translations as any[]).map((t) => ({
+            id: t.id as number,
+            keyPath: t.keyPath as string,
+            description: t.description ?? null,
+            translations: Object.fromEntries(
+              Object.entries(t.translations ?? {}).map(([code, cell]: any) => [
+                code,
+                {
+                  value: cell?.value ?? "",
+                  isTranslated: !!cell?.isTranslated,
+                },
+              ])
+            ),
+          }))}
+        />
+
+        {/* 翻譯社 Excel 匯入 */}
+        <ImportFromAgencyModal
+          open={showImportAgency}
+          onClose={() => setShowImportAgency(false)}
+          locales={projectLocales as any[]}
+          pending={batchUpdateMutation.isPending}
+          keys={(translations as any[]).map((t) => ({
+            id: t.id as number,
+            keyPath: t.keyPath as string,
+            translations: Object.fromEntries(
+              Object.entries(t.translations ?? {}).map(([code, cell]: any) => [
+                code,
+                { value: cell?.value ?? "" },
+              ])
+            ),
+          }))}
+          onSubmit={async (updates) => {
+            await batchUpdateMutation.mutateAsync({
+              updates,
+              versionId: selectedVersion ?? undefined,
             });
           }}
         />
