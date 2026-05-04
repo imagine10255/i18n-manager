@@ -67,20 +67,23 @@ export default function CreateProjectModal({
           <DialogTitle>新增專案</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 py-2">
           <div>
-            <Label htmlFor="project-name">專案名稱 *</Label>
+            <Label htmlFor="project-name" className="text-xs">
+              專案名稱 <span className="text-destructive">*</span>
+            </Label>
             <Input
               id="project-name"
               placeholder="例如：系統前端、遊戲前端、美術"
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={isLoading}
+              className="mt-1"
             />
           </div>
 
           <div>
-            <Label htmlFor="project-desc">描述</Label>
+            <Label htmlFor="project-desc" className="text-xs">描述</Label>
             <Textarea
               id="project-desc"
               placeholder="專案描述（選填）"
@@ -88,6 +91,7 @@ export default function CreateProjectModal({
               onChange={(e) => setDescription(e.target.value)}
               disabled={isLoading}
               rows={3}
+              className="mt-1"
             />
           </div>
         </div>
