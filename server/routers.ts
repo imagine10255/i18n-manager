@@ -43,6 +43,7 @@ import {
   upsertTranslation,
   upsertUser,
   getAllProjects,
+  getAllProjectsIncludingInactive,
   createProject,
   getVersionsByProject,
   createVersion,
@@ -181,6 +182,11 @@ const localeRouter = router({
 // ─── Project router ───────────────────────────────────────────────────────────
 const projectRouter = router({
   list: protectedProcedure.query(() => getAllProjects()),
+  /**
+   * Admin-only：把所有專案撈出來（含已停用 / 軟刪除的），用在「專案管理」
+   * 頁面上讓 admin 可以復原刪除過的專案。
+   */
+  listAll: adminProcedure.query(() => getAllProjectsIncludingInactive()),
   /** Read a single project by id (for the project-settings dialog). */
   get: protectedProcedure
     .input(z.object({ id: z.number().int() }))
@@ -224,6 +230,46 @@ const projectRouter = router({
       }
       await updateProject(id, data);
       return { success: true };
+    }),
+  /**
+   * 軟刪除專案：把 isActive 設成 false，從 list 隱藏。底下所有 translationKeys /
+   * translations / history / snapshots / exports / versions 全部保留 — 之後若
+   * 想復原，admin 可以走 update 把 isActive 改回 true。
+   *
+   * 不做 hard delete 是因為：
+   *   • 跨表級聯太深，且 history / snapshots 是審計資料、不該被一鍵抹除
+   *   • 軟刪除已能滿足「從列表移除」的需求
+   *   • 真的要清掉資料庫，請走 DB / SQL 直接清，比 API 更明確安全
+   */
+  delete: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const project = await getProjectById(input.id);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "專案不存在",
+        });
+      }
+      await updateProject(input.id, { isActive: false });
+      return { success: true } as const;
+    }),
+  /**
+   * 復原軟刪除：把 isActive 設回 true。底下的 keys / translations 本來就沒
+   * 動過，所以復原後資料就回來了。
+   */
+  restore: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const project = await getProjectById(input.id);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "專案不存在",
+        });
+      }
+      await updateProject(input.id, { isActive: true });
+      return { success: true } as const;
     }),
 });
 

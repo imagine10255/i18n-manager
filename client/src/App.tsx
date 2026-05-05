@@ -11,6 +11,7 @@ import TranslationEditorOptimized from "./pages/TranslationEditorOptimized";
 import HistoryPage from "./pages/HistoryPage";
 import UserManager from "./pages/UserManager";
 import Home from "./pages/Home";
+import ProjectManager from "./pages/ProjectManager";
 import SharedKeysManager from "./pages/TemplateManager";
 
 function Router() {
@@ -20,6 +21,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/locales" component={LocaleManager} />
+      <Route path="/projects" component={ProjectManager} />
       <Route path="/editor" component={TranslationEditorOptimized} />
       <Route path="/shared-keys" component={SharedKeysManager} />
       {/* legacy alias — keep old bookmarks working */}

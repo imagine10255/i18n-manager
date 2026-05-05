@@ -271,6 +271,16 @@ export async function getAllProjects() {
     .orderBy(asc(projects.name));
 }
 
+/**
+ * 給管理頁用：把所有專案撈出來，包含 isActive=false 的軟刪除項目。
+ * 一般使用者拿不到、admin 才能呼叫（在 router 層用 adminProcedure 把關）。
+ */
+export async function getAllProjectsIncludingInactive() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(projects).orderBy(asc(projects.name));
+}
+
 export async function getProjectById(id: number) {
   const db = await getDb();
   if (!db) return null;

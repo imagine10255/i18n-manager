@@ -34,7 +34,8 @@ export default function CreateProjectModal({
       toast.success("專案建立成功");
       setName("");
       setDescription("");
-      utils.project.list.invalidate();
+      // 同時 invalidate list 與 listAll（管理頁用）
+      utils.project.invalidate();
       onClose();
       onSuccess?.();
     },

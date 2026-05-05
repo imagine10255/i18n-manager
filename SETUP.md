@@ -101,3 +101,6 @@ shared/                  # client/server 共用常數與型別
 **忘記管理員密碼** — 暫時把 `LOCAL_AUTH_USERNAME` / `LOCAL_AUTH_PASSWORD` 加回 `.env.local` 重啟，進系統重設後再移除。
 
 **Migration 失敗（DROP INDEX 找不到）** — 通常代表 DB 跟 snapshot 對不上。看 `drizzle/<NNNN>_*.sql` 內容，必要時手動跑那條 SQL 或編輯 migration 檔（之前有過 `0009_orange_jubilee.sql` 因為 unique 約束跟舊 index 名衝突的案例）。
+
+**重設管理者密碼** — `pnpm set-admin admin@example.com myPassword123`
+

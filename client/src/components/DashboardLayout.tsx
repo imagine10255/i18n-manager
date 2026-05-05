@@ -29,6 +29,7 @@ import {
   BookOpen,
   ChevronDown,
   Clock,
+  Folder,
   Globe,
   Key,
   LayoutDashboard,
@@ -73,6 +74,7 @@ const menuGroups: { label: string; items: MenuItem[] }[] = [
   {
     label: "Administration",
     items: [
+      { icon: Folder, label: "專案管理", path: "/projects", roles: ["admin"] },
       { icon: Globe, label: "語系管理", path: "/locales", roles: ["admin"] },
       { icon: Users, label: "使用者管理", path: "/users", roles: ["admin"] },
     ],

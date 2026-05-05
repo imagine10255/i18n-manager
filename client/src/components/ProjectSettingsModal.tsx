@@ -11,7 +11,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Settings2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Loader2, Settings2, Trash2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { LocaleFlag } from "./LocaleFlag";
@@ -42,12 +53,21 @@ export default function ProjectSettingsModal({
   const updateMutation = trpc.project.update.useMutation({
     onSuccess: () => {
       toast.success("專案設定已更新");
-      utils.project.list.invalidate();
-      utils.project.get.invalidate({ id: projectId ?? 0 });
+      // 一次 invalidate 整個 project namespace（list / listAll / get 一起重抓）
+      utils.project.invalidate();
       onClose();
     },
     onError: (e) => toast.error(`更新失敗：${e.message}`),
   });
+  const deleteMutation = trpc.project.delete.useMutation({
+    onSuccess: () => {
+      toast.success("專案已刪除");
+      utils.project.invalidate();
+      onClose();
+    },
+    onError: (e) => toast.error(`刪除失敗：${e.message}`),
+  });
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const project = projectQuery.data as any;
   const allLocales = (localesQuery.data ?? []) as any[];
@@ -233,6 +253,81 @@ export default function ProjectSettingsModal({
             </p>
           )}
           </div>
+
+          {/* Danger zone — 刪除專案（軟刪除：只是把 isActive 設成 false） */}
+          {projectId !== null && (
+            <div className="pt-3 border-t border-destructive/30 space-y-2">
+              <Label className="text-xs uppercase tracking-wider text-destructive font-semibold">
+                危險區
+              </Label>
+              <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+                <div className="text-xs text-muted-foreground">
+                  刪除後此專案會從列表隱藏，但歷史紀錄與翻譯資料保留，之後可再復原。
+                </div>
+                <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="gap-1.5 shrink-0"
+                      disabled={deleteMutation.isPending || updateMutation.isPending}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      刪除專案
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>確定要刪除此專案？</AlertDialogTitle>
+                      <AlertDialogDescription asChild>
+                        <div className="space-y-2 text-sm text-muted-foreground">
+                          <div>
+                            <span className="font-medium text-foreground">
+                              {project?.name}
+                            </span>{" "}
+                            將從列表隱藏。
+                          </div>
+                          <div>
+                            這是<span className="font-medium">軟刪除</span>，不會清除底下的
+                            translationKeys / translations / history / snapshots /
+                            exports / versions。之後若想復原，可由資料庫把
+                            isActive 改回 true。
+                          </div>
+                        </div>
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={deleteMutation.isPending}>
+                        取消
+                      </AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        disabled={deleteMutation.isPending}
+                        onClick={(e) => {
+                          // 阻止 Radix 預設的 close-on-action，等 mutation 完成再關
+                          e.preventDefault();
+                          if (!projectId) return;
+                          deleteMutation.mutate(
+                            { id: projectId },
+                            { onSettled: () => setDeleteOpen(false) }
+                          );
+                        }}
+                      >
+                        {deleteMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                            刪除中…
+                          </>
+                        ) : (
+                          "確定刪除"
+                        )}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter>
