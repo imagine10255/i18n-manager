@@ -35,6 +35,9 @@ services:
     # 故意不開 ports — demo 機器上只給容器內部網路用，比較安全
     volumes:
       - mysql_demo_data:/var/lib/mysql
+      # demo-data/*.sql 會在「第一次啟動」（空 volume）時自動匯入
+      # 已有資料就不會再跑；要重灌請先 `down -v`
+      - ./demo-data:/docker-entrypoint-initdb.d:ro
     networks:
       - i18n-demo
     command: >

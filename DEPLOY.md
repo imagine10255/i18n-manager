@@ -155,6 +155,42 @@ docker exec -i i18n-demo-mysql mysql \
   i18n_manager < backup-2026-05-05.sql
 ```
 
+### 用 demo-data/ seed 範本初始化
+
+`demo-data/` 資料夾下的 `.sql` 會在 MySQL **第一次啟動**時自動匯入（透過 docker-entrypoint-initdb.d 機制）。
+
+適合用途：
+
+- 新部署一台 demo，希望開機就有預設範例資料
+- 把線上 demo 重置回乾淨範本狀態
+
+產生 seed：
+
+```bash
+# 從你本地 dev DB 匯出（含 schema + 資料 + drizzle 的 migration 狀態）
+mysqldump -h 127.0.0.1 -uroot -proot \
+  --single-transaction --routines --triggers \
+  --default-character-set=utf8mb4 \
+  i18n_manager > demo-data/01-seed.sql
+```
+
+部署到 demo 機器：
+
+```bash
+git pull
+# 砍掉舊 volume，下次 up 就會自動跑 demo-data/*.sql
+docker compose -f docker-compose.demo.yml down -v
+docker compose --env-file .env.demo -f docker-compose.demo.yml up -d
+```
+
+注意：
+
+- 只在 **volume 為空** 時執行（第一次 up 或 `down -v` 之後）
+- 多檔請用 `01-`、`02-` 開頭，會照字母順序跑
+- dump 必須包含 `__drizzle_migrations__` 表的資料，否則 app 啟動時 drizzle migrate 會嘗試重跑所有 migration 然後失敗
+- 不要 commit 包含真實使用者密碼 hash 的 dump
+- 詳細說明見 [`demo-data/README.md`](./demo-data/README.md)
+
 ## 加 HTTPS（建議）
 
 Demo 對外 port 直接用 HTTP 不太理想（cookie 會被中間人看到、瀏覽器會警告）。建議在前面包一層 Caddy 自動處理 Let's Encrypt 憑證。
