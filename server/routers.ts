@@ -1172,6 +1172,15 @@ export const appRouter = router({
 
         // Bootstrap fallback: no DB user with that email + password set →
         // fall through to the ENV-configured single shared credential.
+        //
+        // 這條路徑同時涵蓋兩種情境：
+        //   (1) 完全沒有 admin row（首次安裝），透過 OWNER_OPEN_ID 建一筆。
+        //   (2) admin row 已存在但 email / passwordHash 是空的（舊 OAuth 帳號），
+        //       upsertUser 以 openId 為 key，會把 email + passwordHash 補寫進去。
+        //
+        // 補寫 passwordHash 之後，下次登入就會走上面的標準 email + password
+        // 驗證路徑，不再依賴 ENV.LOCAL_AUTH_*。等於這條 fallback 是「一次性
+        // 的 boot 引信」，不是長期登入機制。
         if (
           ENV.localAuthUsername &&
           ENV.localAuthPassword &&
@@ -1180,11 +1189,17 @@ export const appRouter = router({
         ) {
           const openId = ENV.ownerOpenId || input.email;
           const name = ENV.ownerName || input.email;
+          // 也把 passwordHash 寫進去，這樣未來的登入可以走標準路徑，
+          // 不必每次都比對 ENV.LOCAL_AUTH_*。
+          const passwordHash = await hashPassword(input.password);
           await upsertUser({
             openId,
             name,
             email: input.email,
             loginMethod: "local",
+            role: "admin",
+            isActive: true,
+            passwordHash,
             lastSignedIn: new Date(),
           });
           const token = await sdk.createSessionToken(openId, {
