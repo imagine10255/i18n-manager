@@ -171,7 +171,7 @@ docker exec -i i18n-demo-mysql mysql \
 mysqldump -h 127.0.0.1 -uroot -proot \
   --single-transaction --routines --triggers \
   --default-character-set=utf8mb4 \
-  i18n_manager > demo-data/01-seed.sql
+  i18n_manager > demo-data/i18n_manager.sql
 ```
 
 部署到 demo 機器：
@@ -186,7 +186,7 @@ docker compose --env-file .env.demo -f docker-compose.demo.yml up -d
 注意：
 
 - 只在 **volume 為空** 時執行（第一次 up 或 `down -v` 之後）
-- 多檔請用 `01-`、`02-` 開頭，會照字母順序跑
+- 單一檔案隨便命名沒差；多檔時用 `01-`、`02-` 開頭，會照字母順序跑
 - dump 必須包含 `__drizzle_migrations__` 表的資料，否則 app 啟動時 drizzle migrate 會嘗試重跑所有 migration 然後失敗
 - 不要 commit 包含真實使用者密碼 hash 的 dump
 - 詳細說明見 [`demo-data/README.md`](./demo-data/README.md)
