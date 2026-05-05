@@ -26,7 +26,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
+import { Label } from "@/components/ui/label";
 import {
+  AlertTriangle,
   Folder,
   FolderOpen,
   Loader2,
@@ -74,6 +76,8 @@ export default function ProjectManager() {
   const [settingsId, setSettingsId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<ProjectRow | null>(null);
   const [restoring, setRestoring] = useState<ProjectRow | null>(null);
+  const [hardDeleting, setHardDeleting] = useState<ProjectRow | null>(null);
+  const [hardConfirmText, setHardConfirmText] = useState("");
   const [search, setSearch] = useState("");
 
   const deleteMutation = trpc.project.delete.useMutation({
@@ -91,6 +95,17 @@ export default function ProjectManager() {
     },
     onError: (e) => toast.error(`復原失敗：${e.message}`),
     onSettled: () => setRestoring(null),
+  });
+  const hardDeleteMutation = trpc.project.hardDelete.useMutation({
+    onSuccess: () => {
+      toast.success("專案及底下所有資料已永久刪除");
+      utils.project.invalidate();
+    },
+    onError: (e) => toast.error(`永久刪除失敗：${e.message}`),
+    onSettled: () => {
+      setHardDeleting(null);
+      setHardConfirmText("");
+    },
   });
 
   const projects = (projectsQuery.data ?? []) as ProjectRow[];
@@ -269,13 +284,26 @@ export default function ProjectManager() {
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             {inactive ? (
-                              <DropdownMenuItem
-                                onClick={() => setRestoring(project)}
-                                className="cursor-pointer text-emerald-700 dark:text-emerald-400 focus:text-emerald-700"
-                              >
-                                <RotateCcw className="h-4 w-4 mr-2" />
-                                復原
-                              </DropdownMenuItem>
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => setRestoring(project)}
+                                  className="cursor-pointer text-emerald-700 dark:text-emerald-400 focus:text-emerald-700"
+                                >
+                                  <RotateCcw className="h-4 w-4 mr-2" />
+                                  復原
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setHardConfirmText("");
+                                    setHardDeleting(project);
+                                  }}
+                                  className="cursor-pointer text-destructive focus:text-destructive"
+                                >
+                                  <AlertTriangle className="h-4 w-4 mr-2" />
+                                  永久刪除
+                                </DropdownMenuItem>
+                              </>
                             ) : (
                               <DropdownMenuItem
                                 onClick={() => setDeleting(project)}
@@ -396,6 +424,95 @@ export default function ProjectManager() {
                 </>
               ) : (
                 "確定復原"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 永久刪除確認 — 比軟刪除更嚴格，必須輸入專案名稱 */}
+      <AlertDialog
+        open={hardDeleting !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setHardDeleting(null);
+            setHardConfirmText("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              永久刪除此專案？
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <div>
+                  即將永久刪除{" "}
+                  <span className="font-medium text-foreground">
+                    {hardDeleting?.name}
+                  </span>{" "}
+                  以及底下所有相關資料：
+                </div>
+                <ul className="list-disc pl-5 space-y-0.5 text-xs">
+                  <li>所有 translationKeys</li>
+                  <li>所有 translations（多語系內容）</li>
+                  <li>所有修改歷程 (translationHistory)</li>
+                  <li>所有版本快照 (translationSnapshots)</li>
+                  <li>所有版本紀錄 (translationVersions)</li>
+                  <li>所有匯出紀錄 (translationExports)</li>
+                </ul>
+                <div className="text-destructive font-medium">
+                  此動作無法復原。
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="hard-confirm" className="text-xs">
+              請輸入專案名稱{" "}
+              <span className="font-mono font-semibold text-foreground">
+                {hardDeleting?.name}
+              </span>{" "}
+              以確認：
+            </Label>
+            <Input
+              id="hard-confirm"
+              value={hardConfirmText}
+              onChange={(e) => setHardConfirmText(e.target.value)}
+              placeholder={hardDeleting?.name ?? ""}
+              autoComplete="off"
+              disabled={hardDeleteMutation.isPending}
+              className="font-mono text-sm"
+            />
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={hardDeleteMutation.isPending}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={
+                hardDeleteMutation.isPending ||
+                hardConfirmText !== (hardDeleting?.name ?? "")
+              }
+              onClick={(e) => {
+                e.preventDefault();
+                if (!hardDeleting) return;
+                if (hardConfirmText !== hardDeleting.name) return;
+                hardDeleteMutation.mutate({ id: hardDeleting.id });
+              }}
+            >
+              {hardDeleteMutation.isPending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                  刪除中…
+                </>
+              ) : (
+                "永久刪除"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

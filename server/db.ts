@@ -281,6 +281,67 @@ export async function getAllProjectsIncludingInactive() {
   return db.select().from(projects).orderBy(asc(projects.name));
 }
 
+/**
+ * 硬刪除（cascade）：把專案以及底下所有相依資料一次清掉。
+ *
+ * 級聯範圍：
+ *   • translations           — 透過 translation_keys.id（projectId）
+ *   • translation_history    — 透過 translation_keys.id
+ *   • translation_snapshots  — 透過 translation_versions.id
+ *   • translation_exports    — 透過 projectId
+ *   • translation_versions   — 透過 projectId
+ *   • translation_keys       — 透過 projectId
+ *   • projects               — id
+ *
+ * 不會動的：
+ *   • shared_keys / shared_translations — 跨專案共用，刪 project 不該清掉公版
+ *   • users / locales                   — 完全不相關
+ *
+ * 全部包在一個 transaction 裡，任何一步炸掉就 rollback。
+ */
+export async function hardDeleteProject(projectId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.transaction(async (tx) => {
+    // 先撈出底下的 keyIds / versionIds，方便用 IN 查詢清掉相依資料
+    const keyRows = await tx
+      .select({ id: translationKeys.id })
+      .from(translationKeys)
+      .where(eq(translationKeys.projectId, projectId));
+    const keyIds = (keyRows as Array<{ id: number }>).map((r) => r.id);
+
+    const versionRows = await tx
+      .select({ id: translationVersions.id })
+      .from(translationVersions)
+      .where(eq(translationVersions.projectId, projectId));
+    const versionIds = (versionRows as Array<{ id: number }>).map((r) => r.id);
+
+    if (keyIds.length > 0) {
+      await tx
+        .delete(translations)
+        .where(inArray(translations.keyId, keyIds));
+      await tx
+        .delete(translationHistory)
+        .where(inArray(translationHistory.keyId, keyIds));
+    }
+    if (versionIds.length > 0) {
+      await tx
+        .delete(translationSnapshots)
+        .where(inArray(translationSnapshots.versionId, versionIds));
+    }
+    await tx
+      .delete(translationExports)
+      .where(eq(translationExports.projectId, projectId));
+    await tx
+      .delete(translationVersions)
+      .where(eq(translationVersions.projectId, projectId));
+    await tx
+      .delete(translationKeys)
+      .where(eq(translationKeys.projectId, projectId));
+    await tx.delete(projects).where(eq(projects.id, projectId));
+  });
+}
+
 export async function getProjectById(id: number) {
   const db = await getDb();
   if (!db) return null;

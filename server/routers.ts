@@ -44,6 +44,7 @@ import {
   upsertUser,
   getAllProjects,
   getAllProjectsIncludingInactive,
+  hardDeleteProject,
   createProject,
   getVersionsByProject,
   createVersion,
@@ -269,6 +270,34 @@ const projectRouter = router({
         });
       }
       await updateProject(input.id, { isActive: true });
+      return { success: true } as const;
+    }),
+  /**
+   * 永久刪除：cascade 把專案 + 底下所有 keys / translations / history /
+   * snapshots / exports / versions 一併清掉。回不來。
+   *
+   * 流程上要求兩步：
+   *   1) 必須是已軟刪除 (isActive=false) 的專案才允許硬刪除 — 確保使用者
+   *      已經做過一次「下架」確認，不會手滑直接清掉啟用中的專案
+   *   2) UI 端再要求輸入專案名稱二次確認
+   */
+  hardDelete: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const project = await getProjectById(input.id);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "專案不存在",
+        });
+      }
+      if (project.isActive) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "請先軟刪除（停用）此專案，才能執行永久刪除",
+        });
+      }
+      await hardDeleteProject(input.id);
       return { success: true } as const;
     }),
 });
