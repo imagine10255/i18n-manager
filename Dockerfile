@@ -13,6 +13,8 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 RUN npm install -g pnpm
 COPY package.json pnpm-lock.yaml ./
+# pnpm.patchedDependencies 設定的 patch 檔在 install 階段就要讀，必須一起 copy
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
@@ -23,6 +25,8 @@ RUN npm install -g pnpm
 
 COPY package.json pnpm-lock.yaml ./
 # drizzle-kit 是 devDependency，但 production 容器裡需要跑 migrate，所以這邊也要全裝
+# patches/ 同樣要帶進來，不然 pnpm 找不到 patchedDependencies 設定的 patch 檔
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
 COPY --from=builder /app/dist ./dist
