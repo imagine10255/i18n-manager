@@ -1,0 +1,102 @@
+# i18n Manager — Demo 部署
+#
+# 設計目標：丟到一台 VPS 上一鍵起來，給人試玩用
+#   • 單一 app + 單一 mysql，全部容器化
+#   • DB 用 named volume 持久化（資料留在主機 docker volume 裡）
+#   • MySQL 不對外暴露 port，只在內部網路給 app 用
+#   • 沒有 nginx，app 直接對外聽（要 HTTPS 自己包 caddy/traefik 在外面）
+#
+# 啟動：
+#   cp .env.demo.example .env.demo
+#   # 編輯 .env.demo 填入 JWT_SECRET / 密碼等
+#   docker compose --env-file .env.demo -f docker-compose.demo.yml up -d --build
+#
+# 看 log：
+#   docker compose -f docker-compose.demo.yml logs -f app
+#
+# 重置 demo（會清掉所有翻譯資料）：
+#   docker compose -f docker-compose.demo.yml down -v
+#
+# 備份 DB：
+#   docker exec i18n-demo-mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
+#     "$MYSQL_DATABASE" > backup-$(date +%F).sql
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: i18n-demo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: 'Asia/Taipei'
+    # 故意不開 ports — demo 機器上只給容器內部網路用，比較安全
+    volumes:
+      - mysql_demo_data:/var/lib/mysql
+    networks:
+      - i18n-demo
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # demo 機器資源有限，限制一下 log 大小
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: i18n-demo-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      JWT_SECRET: ${JWT_SECRET}
+      OWNER_OPEN_ID: ${OWNER_OPEN_ID}
+      OWNER_NAME: ${OWNER_NAME:-}
+      LOCAL_AUTH_USERNAME: ${LOCAL_AUTH_USERNAME:-}
+      LOCAL_AUTH_PASSWORD: ${LOCAL_AUTH_PASSWORD:-}
+      VITE_APP_TITLE: ${VITE_APP_TITLE:-多語系翻譯管理系統}
+    ports:
+      # 主機 ${APP_PORT} → 容器 3000
+      - "${APP_PORT:-8080}:3000"
+    networks:
+      - i18n-demo
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # 起來先跑 migration 再啟 server；migration 失敗就讓它 crash，restart 會重試
+    command: sh -c "pnpm drizzle-kit migrate && node dist/index.js"
+    healthcheck:
+      # 用 node 內建 http 戳自己根路徑，避免裝 curl/wget
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mysql_demo_data:
+    driver: local
+
+networks:
+  i18n-demo:
+    driver: bridge

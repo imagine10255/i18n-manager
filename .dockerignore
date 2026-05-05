@@ -1,0 +1,35 @@
+# Node / build artifacts
+node_modules
+dist
+.pnpm-store
+
+# Local env / IDE
+.env
+.env.local
+.env.*.local
+.vscode
+.idea
+*.log
+
+# Manus / debug logs
+.manus-logs
+
+# Git
+.git
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests / docs
+coverage
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Docker compose 本身不需要進 image
+docker-compose*.yml
+Dockerfile*
+.dockerignore
